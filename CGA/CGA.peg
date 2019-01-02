@@ -1,6 +1,7 @@
 ﻿@using System.Linq
 @using System.Reflection
 @namespace CGA
+@accessibility public
 @classname Parser
 @members {
 	private static T ParseEnum<T>(string value) where T : struct, IConvertible

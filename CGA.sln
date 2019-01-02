@@ -3,13 +3,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
 VisualStudioVersion = 15.0.28010.2046
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FunctionParser", "FunctionParser\FunctionParser.csproj", "{2B289086-B101-4E69-8D04-8C6328117E75}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CGACommandLine", "CGAParser\CGACommandLine.csproj", "{B861EFC8-48F7-4DAD-8CA5-0154EF6773FD}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CGACommandLine", "CGACommandLine\CGACommandLine.csproj", "{B861EFC8-48F7-4DAD-8CA5-0154EF6773FD}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CGA", "CGA\CGA.csproj", "{91CA3C98-3565-4870-B989-7167EF27FB58}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CGARenderer", "CGArenderer\CGARenderer.csproj", "{C849097B-5837-4BB5-8C94-667CFFE605C1}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CGARenderer", "CGARenderer\CGARenderer.csproj", "{C849097B-5837-4BB5-8C94-667CFFE605C1}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -17,10 +15,6 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{2B289086-B101-4E69-8D04-8C6328117E75}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{2B289086-B101-4E69-8D04-8C6328117E75}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{2B289086-B101-4E69-8D04-8C6328117E75}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{2B289086-B101-4E69-8D04-8C6328117E75}.Release|Any CPU.Build.0 = Release|Any CPU
 		{B861EFC8-48F7-4DAD-8CA5-0154EF6773FD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{B861EFC8-48F7-4DAD-8CA5-0154EF6773FD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B861EFC8-48F7-4DAD-8CA5-0154EF6773FD}.Release|Any CPU.ActiveCfg = Release|Any CPU
