@@ -1,0 +1,78 @@
+﻿@using System.Linq
+@using System.Reflection
+@namespace CGA
+@classname Parser
+@members {
+	private static T ParseEnum<T>(string value) where T : struct, IConvertible
+	{
+		if (!typeof(T).IsEnum) 
+		{
+			throw new ArgumentException($"{typeof(T).FullName} is not an enumerator");
+		}
+		return (T)Enum.Parse(typeof(T), value.ToUpper()); 
+	}
+}
+
+RParseTree <ParseTree> = productions:RProductionRule<0,,_> { new ParseTree(productions) }
+
+RProductionRule <ProductionRule> = _ predecessor:RSymbol _ "-->" _ successors:RSuccessor<1,,_> _ ";" { new ProductionRule(predecessor, successors) }
+
+RTranslate <Operation> = "t" _ "(" _ params:RExp<3, 3, _ "," _> _ ")" { new Translate("t", @params.Cast<object>().ToList()) }
+
+RRotate <Operation> = "r" _ "(" _ params:RExp<3, 3, _ "," _> _ ")" _ { new Rotate("r", @params.Cast<object>().ToList()) }
+
+RScale <Operation> = "s" _ "(" _ params:RExp<3, 3, _ "," _> _ ")" _ { new Scale("s", @params.Cast<object>().ToList()) }
+
+RExtrude <Operation> = "extrude" _ "(" _ params:RExp<1, 2, _ "," _> _ ")" _ { new Extrude("extrude", @params.Cast<object>().ToList()) }
+
+RCompSplit <Operation> = "comp" _ "(" _ selector:RCompSel _ ")" _ "{" _ args:RCompSplitArg<0,, _ "," _> _ "}" { new CompSplit("comp", new List<object>() { selector }.Union(args.Cast<object>()).ToList()) }
+
+RCompSplitArg <CompSplitArg> = selector:RSemSel _ (":" / "=") _ successor:RSuccessor { new CompSplitArg(selector, successor) }
+
+RCompSel <ComponentSelector> = value:("f"i / "e"i / "v"i) { (ComponentSelector)value.ToUpper()[0] }
+
+RSemSel <SemanticSelector> = value:("front"i / "back"i / "left"i / "right"i / "top"i / "bottom"i / "vertical"i / "horizontal"i / "side"i / "all"i) { ParseEnum<SemanticSelector>(value) }
+
+RSplit <Operation> = "split" _ "(" _ params:RSplitParams _ ")" _ pattern:RSplitPattern { new Split("split", @params.Union(new object[] { pattern }).ToList()) }
+
+RSplitParams <IEnumerable<object>> = axis:RAxis { new object[] { axis } } / axis:RAxis _ "," _ adjust:RAdjSel { new object[] { axis, adjust } }
+
+RAdjSel <AdjustSelector> = value:("adjust" / "noAdjust") { ParseEnum<AdjustSelector>(value) }
+
+RSplitter <ISplitter> = RSplitStep / RSplitPattern
+
+RSplitPattern <SplitPattern> = "{" _ steps:RSplitter<0,, _ "|" _> _ "}" _ switch:"*"? { new SplitPattern(steps, @switch.Count > 0) }
+
+RSplitStep <SplitStep> = prefix:RSizePrefix? _ value:RExp _ ":" _ successor:RSuccessor { new SplitStep(prefix.Count == 0 ? (SizePrefix?)null : prefix[0], value, successor) }
+
+RSizePrefix <SizePrefix> = value:("~" / "'") { (SizePrefix)value.ToUpper()[0] }
+
+ROperation <Operation> = RTranslate / RRotate / RScale / RExtrude / RCompSplit / RSplit
+
+RSymbol <Symbol> = name:RIdentifier { new Symbol(name) }
+
+RSuccessor <ISymbol> = ROperation / RSymbol
+
+RExp <float> -memoize = lval:RExp _ op:RExpOperation _ rval:RExp { op(lval, rval) } / "(" _ value:RExp _ ")" { value } / value:RExpOperand { value }
+
+RExpOperation <Func<float, float, float>> = value:("+" / "-" / "*" / "/" / "%" / "^") {{
+	if (value == "+") { return (a, b) => a + b; }
+	else if (value == "-") { return (a, b) => a - b; }
+	else if (value == "*") { return (a, b) => a * b; }
+	else if (value == "/") { return (a, b) => a / b; }
+	else if (value == "%") { return (a, b) => a % b; }
+	else if (value == "^") { return (a, b) => (float)Math.Pow(a, b); }
+	else { throw new Exception("Unknown operation"); }
+}}
+
+RExpOperand <float> = RFloat / "-" _ value:RExpOperand { -value } / "(" _ value:RExpOperand _ ")" { value } / value:RAxis { (float)value } / value:RNIL { 0 }
+
+RAxis <Axis> = value:("X"i / "Y"i / "Z"i) { ParseEnum<Axis>(value) }
+
+RIdentifier <string> -memoize = value: ([a-zA-Z]+) { string.Join("", value) }
+
+RNIL <object> -memoize = "NIL"i { null }
+
+RFloat <float> -memoize = value:([-]?[0-9]+("."[0-9]*)?) { float.Parse(value) }
+
+_ -memoize = [ \t\r\n]*
