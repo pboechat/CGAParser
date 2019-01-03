@@ -17,7 +17,7 @@ namespace CGACommandLine
             var parseTree = parser.Parse(content);
             Console.WriteLine(parseTree);
             var interpreter = new Interpreter();
-            var shapes = interpreter.Run(parseTree, new Axiom("a", new Box()));
+            var shapes = interpreter.Run(parseTree, new Axiom(new Symbol("a"), new Box()));
             foreach (var shape in shapes)
             {
                 Console.WriteLine(shape);

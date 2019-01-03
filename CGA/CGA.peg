@@ -26,7 +26,7 @@ RScale <Operation> = "s" _ "(" _ params:RExp<3, 3, _ "," _> _ ")" _ { new Scale(
 
 RExtrude <Operation> = "extrude" _ "(" _ params:RExp<1, 2, _ "," _> _ ")" _ { new Extrude("extrude", @params.Cast<object>().ToList()) }
 
-RCompSplit <Operation> = "comp" _ "(" _ selector:RCompSel _ ")" _ "{" _ args:RCompSplitArg<0,, _ "," _> _ "}" { new CompSplit("comp", new List<object>() { selector }.Union(args.Cast<object>()).ToList()) }
+RCompSplit <Operation> = "comp" _ "(" _ selector:RCompSel _ ")" _ "{" _ args:RCompSplitArg<0,, _ "|" _> _ "}" { new CompSplit("comp", new List<object>() { selector }.Union(args.Cast<object>()).ToList()) }
 
 RCompSplitArg <CompSplitArg> = selector:RSemSel _ (":" / "=") _ successor:RSuccessor { new CompSplitArg(selector, successor) }
 

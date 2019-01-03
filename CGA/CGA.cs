@@ -12,17 +12,16 @@ namespace CGA
             if (i == 0) return vector.X;
             else if (i == 1) return vector.Y;
             else if (i == 2) return vector.Z;
-            // TODO:
-            else throw new Exception();
+            else throw new Exception($"Invalid element: {i}");
         }
 
-        public static void SetElement(this Vector3 vector, int i, float value)
+        public static Vector3 SetElement(this Vector3 vector, int i, float value)
         {
             if (i == 0) vector.X = value;
             else if (i == 1) vector.Y = value;
             else if (i == 2) vector.Z = value;
-            // TODO:
-            else throw new Exception();
+            else throw new Exception($"Invalid element: {i}");
+            return vector;
         }
 
         public static Vector3 GetPosition(this Matrix4x4 matrix)
@@ -30,11 +29,12 @@ namespace CGA
             return new Vector3(matrix.M41, matrix.M42, matrix.M43);
         }
 
-        public static void SetPosition(this Matrix4x4 matrix, Vector3 value)
+        public static Matrix4x4 SetPosition(this Matrix4x4 matrix, Vector3 value)
         {
             matrix.M41 = value.X;
             matrix.M42 = value.Y;
             matrix.M43 = value.Z;
+            return matrix;
         }
 
         public static Vector3 GetXAxis(this Matrix4x4 matrix)
@@ -68,9 +68,13 @@ namespace CGA
             }
         }
 
-        public static void PushAll<T>(this Stack<T> stack, IEnumerable<T> elements)
+        public static void SafePushAll<T>(this Stack<T> stack, Stack<T> elements)
         {
-            foreach (var element in elements)
+            if (elements == null)
+            {
+                return;
+            }
+            foreach (var element in elements.Reverse())
             {
                 stack.Push(element);
             }
@@ -164,7 +168,7 @@ namespace CGA
 
     public interface ISymbol
     {
-        IEnumerable<ISymbol> Rewrite(ExecutionContext context);
+        Stack<ISymbol> Rewrite(ExecutionContext context);
     }
 
     public class Symbol : ISymbol
@@ -176,15 +180,26 @@ namespace CGA
             Name = name ?? throw new ArgumentNullException(nameof(name));
         }
 
-        public override string ToString()
+        public Stack<ISymbol> Rewrite(ExecutionContext context)
         {
-            return Name;
+            return context.RunRule(this);
         }
 
-        public IEnumerable<ISymbol> Rewrite(ExecutionContext context)
+        public override string ToString() => Name;
+
+        public override bool Equals(object obj)
         {
-            context.MatchRule(Name)?.Run(context);
-            return Enumerable.Empty<ISymbol>();
+            var other = obj as Symbol;
+            if (other == null)
+            {
+                return false;
+            }
+            return Name == other.Name;
+        }
+
+        public override int GetHashCode()
+        {
+            return Name.GetHashCode();
         }
     }
 
@@ -199,17 +214,17 @@ namespace CGA
             Params = @params ?? throw new ArgumentNullException(nameof(@params)); ;
         }
 
-        public override string ToString()
-        {
-            return $"{Operand}({string.Join(", ", Params.Select(x => x.ToString()))})";
-        }
-
         public T GetParam<T>(int i)
         {
             return (T)Params[i];
         }
 
-        public abstract IEnumerable<ISymbol> Rewrite(ExecutionContext context);
+        public abstract Stack<ISymbol> Rewrite(ExecutionContext context);
+
+        public override string ToString()
+        {
+            return $"{Operand}({string.Join(", ", Params.Select(x => x.ToString()))})";
+        }
     }
 
     public abstract class SRT : Operation
@@ -229,13 +244,13 @@ namespace CGA
         {
         }
 
-        public override IEnumerable<ISymbol> Rewrite(ExecutionContext context)
+        public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
             var T = Matrix4x4.CreateTranslation(new Vector3(X, Y, Z));
             var shape = context.PopShape();
             shape.Transform = T * shape.Transform;
             context.PushShape(shape);
-            return Enumerable.Empty<ISymbol>();
+            return null;
         }
     }
 
@@ -245,13 +260,13 @@ namespace CGA
         {
         }
 
-        public override IEnumerable<ISymbol> Rewrite(ExecutionContext context)
+        public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
-            var R = Matrix4x4.CreateFromYawPitchRoll(X.ToRadians(), Y.ToRadians(), Z.ToRadians());
+            var R = Matrix4x4.CreateFromYawPitchRoll(Y.ToRadians(), X.ToRadians(), Z.ToRadians());
             var shape = context.PopShape();
             shape.Transform = R * shape.Transform;
             context.PushShape(shape);
-            return Enumerable.Empty<ISymbol>();
+            return null;
         }
     }
 
@@ -261,27 +276,63 @@ namespace CGA
         {
         }
 
-        public override IEnumerable<ISymbol> Rewrite(ExecutionContext context)
+        public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
             var newShape = context.PopShape();
             newShape.Size = new Vector3(X, Y, Z);
             context.PushShape(newShape);
-            return Enumerable.Empty<ISymbol>();
+            return null;
+        }
+    }
+
+    public interface IExtrusionStrategy
+    {
+        Shape Extrude(Shape parentShape, Axis axis, float distance);
+    }
+
+    public class QuadExtruder : IExtrusionStrategy
+    {
+        public Shape Extrude(Shape parentShape, Axis axis, float distance)
+        {
+            if (axis != Axis.Z)
+            {
+                throw new Exception($"Cannot extrude {nameof(Quad)} along {axis.ToString()}");
+            }
+            return new Box
+            {
+                Transform = Matrix4x4.CreateRotationX((float)Math.PI * -0.5f) * Matrix4x4.CreateTranslation(0, distance * 0.5f, 0) * parentShape.Transform,
+                Size = parentShape.Size.SetElement((int)Axis.Y, distance)
+            };
+        }
+    }
+
+    public static class ExtrusionStrategyFactory
+    {
+        public static IExtrusionStrategy Create(Type shapeType)
+        {
+            if (shapeType == typeof(Quad))
+            {
+                return new QuadExtruder();
+            }
+            throw new NotImplementedException($"No extrusion strategy found for shape type: {nameof(shapeType.Name)}");
         }
     }
 
     public class Extrude : Operation
     {
-        public Axis Axis => (Params.Count == 1) ? Axis.Z : GetParam<Axis>(0);
-        public float Height => (Params.Count == 1) ? GetParam<float>(0) : GetParam<float>(1);
+        public Axis Axis => (Params.Count == 1) ? Axis.Z : (Axis)GetParam<float>(0);
+        public float Distance => (Params.Count == 1) ? GetParam<float>(0) : GetParam<float>(1);
 
         public Extrude(string operand, IList<object> @params) : base(operand, @params)
         {
         }
 
-        public override IEnumerable<ISymbol> Rewrite(ExecutionContext context)
+        public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
-            throw new NotImplementedException();
+            var shape = context.PopShape();
+            var extrusionStrategy = ExtrusionStrategyFactory.Create(shape.GetType());
+            context.PushShape(extrusionStrategy.Extrude(shape, Axis, Distance));
+            return null;
         }
     }
 
@@ -296,18 +347,15 @@ namespace CGA
             Successor = successor ?? throw new ArgumentNullException(nameof(successor));
         }
 
-        public override string ToString()
-        {
-            return $"{Selector.ToString().ToLower()}: {Successor.ToString()}";
-        }
+        public override string ToString() => $"{Selector.ToString().ToLower()}: {Successor.ToString()}";
     }
 
-    public interface IComponentSplitStrategy
+    public interface IComponentSplittingStrategy
     {
         IEnumerable<Shape> Split(Shape parentShape, ComponentSelector selector);
     }
 
-    public class BoxComponentSplitStrategy : IComponentSplitStrategy
+    public class BoxComponentSplitter : IComponentSplittingStrategy
     {
         public IEnumerable<Shape> Split(Shape parentShape, ComponentSelector selector)
         {
@@ -318,55 +366,55 @@ namespace CGA
                     // top
                     new Quad()
                     {
-                        Transform = Matrix4x4.CreateTranslation(0, parentShape.Size.Y * 0.5f, 0) * Matrix4x4.CreateRotationX((float)Math.PI * 0.5f) * parentShape.Transform,
-                        Size = new Vector3(parentShape.Size.X, 0, parentShape.Size.Z)
+                        Transform = Matrix4x4.CreateRotationX((float)Math.PI * -0.5f) * Matrix4x4.CreateTranslation(0, parentShape.Size.Y * 0.5f, 0) * parentShape.Transform,
+                        Size = new Vector3(parentShape.Size.X, 1, parentShape.Size.Z)
                     },
                     // bottom
                     new Quad()
                     {
-                        Transform = Matrix4x4.CreateTranslation(0, parentShape.Size.Y * -0.5f, 0) * Matrix4x4.CreateRotationX((float)Math.PI * -0.5f) * parentShape.Transform,
-                        Size = new Vector3(parentShape.Size.X, 0, parentShape.Size.Z)
-                    },
-                    // front
-                    new Quad()
-                    {
-                        Transform = Matrix4x4.CreateRotationY((float)Math.PI) * parentShape.Transform,
-                        Size = new Vector3(parentShape.Size.X, 0, parentShape.Size.Z)
+                        Transform = Matrix4x4.CreateRotationX((float)Math.PI * 0.5f) * Matrix4x4.CreateTranslation(0, -parentShape.Size.Y * -0.5f, 0) * parentShape.Transform,
+                        Size = new Vector3(parentShape.Size.X, 1, parentShape.Size.Z)
                     },
                     // back
                     new Quad()
                     {
-                        Transform = parentShape.Transform,
-                        Size = new Vector3(parentShape.Size.X, 0, parentShape.Size.Z)
+                        Transform = Matrix4x4.CreateTranslation(0, 0, parentShape.Size.Z * 0.5f) * parentShape.Transform,
+                        Size = new Vector3(parentShape.Size.X, 1, parentShape.Size.Z)
                     },
-                    // left
+                    // front
                     new Quad()
                     {
-                        Transform = Matrix4x4.CreateTranslation(parentShape.Size.X * -0.5f, 0, 0) * Matrix4x4.CreateRotationY((float)Math.PI * -0.5f) * parentShape.Transform,
-                        Size = new Vector3(parentShape.Size.Z, 0, parentShape.Size.X)
+                        Transform = Matrix4x4.CreateRotationY(-(float)Math.PI) * Matrix4x4.CreateTranslation(0, 0, parentShape.Size.Z * -0.5f) * parentShape.Transform,
+                        Size = new Vector3(parentShape.Size.X, 1, parentShape.Size.Z)
                     },
                     // right
                     new Quad()
                     {
-                        Transform = Matrix4x4.CreateTranslation(parentShape.Size.X * 0.5f, 0, 0) * Matrix4x4.CreateRotationY((float)Math.PI * 0.5f) * parentShape.Transform,
-                        Size = new Vector3(parentShape.Size.Z, 0, parentShape.Size.X)
+                        Transform = Matrix4x4.CreateRotationY((float)Math.PI * 0.5f) * Matrix4x4.CreateTranslation(parentShape.Size.X * 0.5f, 0, 0) * parentShape.Transform,
+                        Size = new Vector3(parentShape.Size.Z, 1, parentShape.Size.X)
+                    },
+                    // left
+                    new Quad()
+                    {
+                        Transform = Matrix4x4.CreateRotationY((float)Math.PI * -0.5f) * Matrix4x4.CreateTranslation(parentShape.Size.X * -0.5f, 0, 0) * parentShape.Transform,
+                        Size = new Vector3(parentShape.Size.Z, 1, parentShape.Size.X)
                     },
                 };
                 return quads;
             }
-            throw new NotImplementedException($"{nameof(BoxComponentSplitStrategy)} doesn't know how to split '{selector.ToString()}' (yet?)");
+            throw new NotImplementedException($"{nameof(BoxComponentSplitter)} doesn't know how to split '{selector.ToString()}' (yet?)");
         }
     }
 
-    public static class ComponentSplitStrategyFactory
+    public static class ComponentSplittingStrategyFactory
     {
-        public static IComponentSplitStrategy Create(Type shapeType)
+        public static IComponentSplittingStrategy Create(Type shapeType)
         {
             if (shapeType == typeof(Box))
             {
-                return new BoxComponentSplitStrategy();
+                return new BoxComponentSplitter();
             }
-            throw new NotImplementedException($"No component split strategy found for shape type '{nameof(shapeType.Name)}'");
+            throw new NotImplementedException($"No component splitting strategy found for shape type: {nameof(shapeType.Name)}");
         }
     }
 
@@ -375,10 +423,10 @@ namespace CGA
         bool Select(Shape parentShape, Shape componentShape, SemanticSelector selector);
     }
 
-    public class BoxSemanticSelectionStrategy : ISemanticSelectionStrategy
+    public class BoxSemanticSelector : ISemanticSelectionStrategy
     {
-        private static float _Epsilon = 0.0001f;
-        private static float _DotThreshold = 1 - _Epsilon;
+        private static readonly float _Epsilon = 0.0001f;
+        private static readonly float _DotThreshold = 1 - _Epsilon;
 
         public static int GetSide(Vector3 a, Vector3 b, Vector3 c)
         {
@@ -397,25 +445,25 @@ namespace CGA
             {
                 case SemanticSelector.FRONT:
                     {
-                        var pZ = parentShape.Transform.GetXAxis();
-                        var dot = Vector3.Dot(pZ, cN);
-                        return dot <= -_DotThreshold; /* Z and N are almost parallel and point to same direction */
-                    }
-                case SemanticSelector.BACK:
-                    {
-                        var pZ = parentShape.Transform.GetXAxis();
+                        var pZ = parentShape.Transform.GetZAxis();
                         var dot = Vector3.Dot(pZ, cN);
                         return dot >= _DotThreshold; /* Z and N are almost parallel and point to opposite directions */
                     }
-                case SemanticSelector.LEFT:
+                case SemanticSelector.BACK:
+                    {
+                        var pZ = parentShape.Transform.GetZAxis();
+                        var dot = Vector3.Dot(pZ, cN);
+                        return dot <= -_DotThreshold; /* Z and N are almost parallel and point to same direction */
+                    }
+                case SemanticSelector.RIGHT:
                     {
                         var pX = parentShape.Transform.GetXAxis();
                         var dot = Vector3.Dot(pX, cN);
                         return dot >= _DotThreshold; /* X and N are almost parallel and point to same direction */
                     }
-                case SemanticSelector.RIGHT:
+                case SemanticSelector.LEFT:
                     {
-                        var pX = parentShape.Transform.GetYAxis();
+                        var pX = parentShape.Transform.GetXAxis();
                         var dot = Vector3.Dot(pX, cN);
                         return dot <= -_DotThreshold; /* X and N are almost parallel and point to opposite directions */
                     }
@@ -440,14 +488,14 @@ namespace CGA
                 case SemanticSelector.VERTICAL:
                 case SemanticSelector.SIDE:
                     {
-                        var pY = parentShape.Transform.GetXAxis();
+                        var pY = parentShape.Transform.GetYAxis();
                         var absDot = Math.Abs(Vector3.Dot(pY, cN));
                         return absDot <= _Epsilon; /* Y and N are almost perpendicular */
                     }
                 case SemanticSelector.ALL:
                     return true; /* permissive */
                 default:
-                    throw new Exception($"Unknown {nameof(SemanticSelector)} '{selector.ToString()}'");
+                    throw new Exception($"Unknown {nameof(SemanticSelector)}: '{selector.ToString()}'");
             }
         }
     }
@@ -458,9 +506,9 @@ namespace CGA
         {
             if (shapeType == typeof(Box))
             {
-                return new BoxSemanticSelectionStrategy();
+                return new BoxSemanticSelector();
             }
-            throw new NotImplementedException($"No component split strategy found for parent shape type '{nameof(shapeType.Name)}'");
+            throw new NotImplementedException($"No semantic selection strategy found for shape type: {nameof(shapeType.Name)}");
         }
     }
 
@@ -473,13 +521,13 @@ namespace CGA
         {
         }
 
-        public override IEnumerable<ISymbol> Rewrite(ExecutionContext context)
+        public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
             var shape = context.PopShape();
             var shapeType = shape.GetType();
-            var shapeComponents = ComponentSplitStrategyFactory.Create(shapeType).Split(shape, Selector);
+            var shapeComponents = ComponentSplittingStrategyFactory.Create(shapeType).Split(shape, Selector);
             var selectionStrategy = SemanticSelectionStrategyFactory.Create(shapeType);
-            var newSymbols = new List<ISymbol>();
+            var newSymbols = new Stack<ISymbol>();
             foreach (var arg in Args)
             {
                 var selectedShapeComponents = shapeComponents.Where(x => selectionStrategy.Select(shape, x, arg.Selector));
@@ -491,21 +539,18 @@ namespace CGA
                 selectedShapeComponents.ForEach(x =>
                 {
                     context.PushShape(x);
-                    newSymbols.Add(arg.Successor);
+                    newSymbols.Push(arg.Successor);
                 });
             }
             return newSymbols;
         }
 
-        public override string ToString()
-        {
-            return $"split({Selector.ToString().ToLower()}) {{ {string.Join(" | ", Args.Select(x => x.ToString()))} }}";
-        }
+        public override string ToString() => $"split({Selector.ToString().ToLower()}) {{ {string.Join(" | ", Args.Select(x => x.ToString()))} }}";
     }
 
     public interface ISplitter
     {
-        IEnumerable<ISymbol> Split(ExecutionContext context, Axis axis, Shape shape, float offset);
+        Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape shape, float offset);
         float GetRelativeStep();
         float GetAbsoluteSize();
         void ComputeAbsoluteSize(float absoluteSizeLeft, float relativeStepsSum);
@@ -516,17 +561,17 @@ namespace CGA
         Shape Split(Shape parentShape, Axis axis, float offset, float length);
     }
 
-    public class BoxSplitStrategy : ISplitStrategy
+    public class ReplicatingSplitStrategy : ISplitStrategy
     {
         public Shape Split(Shape parentShape, Axis axis, float offset, float length)
         {
             var newShape = parentShape.Copy();
             var oldOrigin = newShape.Transform.GetPosition();
             var halfOldLength = newShape.Size.GetElement((int)axis) * 0.5f;
-            var originOffset = Vector3.Zero;
-            originOffset.SetElement((int)axis, offset - halfOldLength);
-            newShape.Transform.SetPosition(oldOrigin + originOffset);
-            newShape.Size.SetElement((int)axis, length);
+            var halfLength = length * 0.5f;
+            var originOffset = Vector3.Zero.SetElement((int)axis, offset - halfOldLength + halfLength);
+            newShape.Transform = newShape.Transform.SetPosition(oldOrigin + originOffset);
+            newShape.Size = newShape.Size.SetElement((int)axis, length);
             return newShape;
         }
     }
@@ -535,11 +580,11 @@ namespace CGA
     {
         public static ISplitStrategy Create(Type shapeType)
         {
-            if (shapeType == typeof(Box))
+            if (shapeType == typeof(Box) || shapeType == typeof(Quad))
             {
-                return new BoxSplitStrategy();
+                return new ReplicatingSplitStrategy();
             }
-            throw new NotImplementedException($"No split strategy found for shape type '{nameof(shapeType.Name)}'");
+            throw new NotImplementedException($"No split strategy found for shape type: {nameof(shapeType.Name)}");
         }
     }
 
@@ -558,17 +603,12 @@ namespace CGA
             _computedAbsoluteSize = 0;
         }
 
-        public override string ToString()
-        {
-            return $"{(Prefix.HasValue ? (char)Prefix.Value : '\0')}{Value.ToString()}: {Successor.ToString()}";
-        }
-
-        public IEnumerable<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset)
+        public Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset)
         {
             var absoluteSize = GetAbsoluteSize();
             var strategy = SplitStrategyFactory.Create(parentShape.GetType());
             context.PushShape(strategy.Split(parentShape, axis, offset, absoluteSize));
-            return new[] { Successor };
+            return new Stack<ISymbol>(new[] { Successor });
         }
 
         public float GetRelativeStep()
@@ -596,6 +636,11 @@ namespace CGA
         {
             _computedAbsoluteSize = absoluteSizeLeft / relativeStepsSum * Value;
         }
+
+        public override string ToString()
+        {
+            return $"{(Prefix.HasValue ? (char)Prefix.Value : '\0')}{Value.ToString()}: {Successor.ToString()}";
+        }
     }
 
     public class SplitPattern : ISplitter
@@ -611,7 +656,7 @@ namespace CGA
             _computedAbsoluteSize = 0;
         }
 
-        public IEnumerable<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset = 0)
+        public Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset = 0)
         {
             var totalAbsoluteSize = GetAbsoluteSize();
             var absoluteSizesSum = Steps.Sum(x => x.GetAbsoluteSize());
@@ -623,19 +668,14 @@ namespace CGA
             }
             var splitStrategy = SplitStrategyFactory.Create(parentShape.GetType());
             var localShape = splitStrategy.Split(parentShape, axis, offset, totalAbsoluteSize);
-            var newSymbols = new List<ISymbol>();
+            var newSymbols = new Stack<ISymbol>();
             float localOffset = 0;
             foreach (var step in Steps)
             {
-                newSymbols.AddRange(step.Split(context, axis, localShape, localOffset));
+                newSymbols.SafePushAll(step.Split(context, axis, localShape, localOffset));
                 localOffset += step.GetAbsoluteSize();
             }
             return newSymbols;
-        }
-
-        public override string ToString()
-        {
-            return $"{{ {string.Join(" | ", Steps.Select(x => x.ToString()))} }}{(HasSwitch ? "*" : "")}";
         }
 
         public float GetRelativeStep()
@@ -652,6 +692,8 @@ namespace CGA
         {
             _computedAbsoluteSize = absoluteSizeLeft / relativeStepsSum;
         }
+
+        public override string ToString() => $"{{ {string.Join(" | ", Steps.Select(x => x.ToString()))} }}{(HasSwitch ? "*" : "")}";
     }
 
     public class Split : Operation
@@ -666,17 +708,14 @@ namespace CGA
         {
         }
 
-        public override IEnumerable<ISymbol> Rewrite(ExecutionContext context)
+        public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
             var shape = context.PopShape();
             Pattern.ComputeAbsoluteSize(shape.Size.GetElement((int)Axis), 1);
             return Pattern.Split(context, Axis, shape);
         }
 
-        public override string ToString()
-        {
-            return $"split({Axis.ToString().ToLower()}) {Pattern.ToString()}";
-        }
+        public override string ToString() => $"split({Axis.ToString().ToLower()}) {Pattern.ToString()}";
     }
 
     public class ProductionRule
@@ -690,20 +729,17 @@ namespace CGA
             Successors = successors ?? throw new ArgumentNullException(nameof(successors));
         }
 
-        public void Run(ExecutionContext context)
+        public Stack<ISymbol> Run(ExecutionContext context)
         {
-            var symbolsToProcess = new Stack<ISymbol>(Successors.Reverse());
-            while (symbolsToProcess.Count > 0)
+            var newSymbols = new Stack<ISymbol>();
+            foreach (var successor in Successors)
             {
-                var symbol = symbolsToProcess.Pop();
-                symbolsToProcess.PushAll(symbol.Rewrite(context));
+                newSymbols.SafePushAll(successor.Rewrite(context));
             }
+            return newSymbols;
         }
 
-        public override string ToString()
-        {
-            return $"{Predecessor} --> {string.Join(" ", Successors.Select(x => x.ToString()))}";
-        }
+        public override string ToString() => $"{Predecessor} --> {string.Join(" ", Successors.Select(x => x.ToString()))}";
     }
 
     public class ParseTree
@@ -712,40 +748,40 @@ namespace CGA
 
         public ParseTree(IEnumerable<ProductionRule> productionRules)
         {
-            ProductionRules = productionRules;
+            ProductionRules = productionRules ?? throw new ArgumentNullException(nameof(productionRules));
         }
 
-        public override string ToString()
-        {
-            return $"{{\n{string.Join(",\n", ProductionRules.Select(x => '\t' + x.ToString()))}\n}}";
-        }
+        public override string ToString() => $"{{\n{string.Join(",\n", ProductionRules.Select(x => '\t' + x.ToString()))}\n}}";
     }
 
     public class Axiom
     {
-        public string SymbolName { get; }
+        public Symbol Symbol { get; }
         public Shape Shape { get; }
 
-        public Axiom(string symbolName, Shape shape)
+        public Axiom(Symbol symbol, Shape shape)
         {
-            SymbolName = symbolName ?? throw new ArgumentNullException(nameof(symbolName));
+            Symbol = symbol ?? throw new ArgumentNullException(nameof(symbol));
             Shape = shape ?? throw new ArgumentNullException(nameof(shape));
         }
     }
 
     public class ExecutionContext
     {
-        private IEnumerable<ProductionRule> ProductionRules { get; }
+        private IDictionary<Symbol, ProductionRule> ProductionRules { get; }
         private IList<Shape> IntermediaryShapes { get; } = new List<Shape>();
         private Stack<Shape> ShapesStack { get; } = new Stack<Shape>();
         public Axiom Axiom { get; }
-        public IReadOnlyCollection<Shape> TerminalShapes => ShapesStack;
+        public List<Shape> TerminalShapes { get; } = new List<Shape>();
 
         public ExecutionContext(IEnumerable<ProductionRule> productionRules, Axiom axiom)
         {
-            ProductionRules = productionRules ?? throw new ArgumentNullException(nameof(productionRules));
+            if (productionRules == null)
+            {
+                throw new ArgumentNullException(nameof(productionRules));
+            }
+            ProductionRules = productionRules.ToDictionary(x => x.Predecessor, y => y);
             Axiom = axiom ?? throw new ArgumentNullException(nameof(axiom));
-            ShapesStack.Push(axiom.Shape.Copy());
         }
 
         public Shape PopShape()
@@ -759,9 +795,19 @@ namespace CGA
             IntermediaryShapes.Add(shape.Copy());
         }
 
-        public ProductionRule MatchRule(string symbolName)
+        public Stack<ISymbol> RunRule(Symbol symbol)
         {
-            return ProductionRules.Where(x => x.Predecessor.Name == symbolName).FirstOrDefault();
+            if (ProductionRules.TryGetValue(symbol, out ProductionRule productionRule))
+            {
+                return productionRule.Run(this);
+            }
+            return RunTerminalRule();
+        }
+
+        private Stack<ISymbol> RunTerminalRule()
+        {
+            TerminalShapes.Add(ShapesStack.Pop());
+            return null;
         }
     }
 
@@ -770,9 +816,15 @@ namespace CGA
         public IReadOnlyCollection<Shape> Run(ParseTree parseTree, Axiom axiom)
         {
             var context = new ExecutionContext(parseTree.ProductionRules, axiom);
-            var startingRule = context.MatchRule(axiom.SymbolName);
-            startingRule.Run(context);
-            return context.TerminalShapes;
+            var symbols = new Stack<ISymbol>();
+            context.PushShape(axiom.Shape);
+            symbols.Push(axiom.Symbol);
+            while (symbols.Count > 0)
+            {
+                var symbol = symbols.Pop();
+                symbols.SafePushAll(symbol.Rewrite(context));
+            }
+            return context.TerminalShapes.AsReadOnly();
         }
     }
 }

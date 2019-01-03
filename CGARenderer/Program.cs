@@ -17,12 +17,11 @@ namespace CGARenderer
                 content = reader.ReadToEnd();
             }
             var parseTree = parser.Parse(content);
-            Console.WriteLine(parseTree);
             var interpreter = new Interpreter();
-            var shapes = interpreter.Run(parseTree, new Axiom("a", new Box()));
+            var shapes = interpreter.Run(parseTree, new Axiom(new Symbol("a"), new Box()));
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            var renderer = new CGARendererApp("CGA Renderer", 640, 480, false, shapes);
+            var renderer = new CGARendererApp("Renderer", 640, 480, false, shapes);
             renderer.Start();
         }
     }

@@ -1,13 +1,13 @@
-﻿using SlimDX.DirectInput;
+﻿using SlimDX;
+using SlimDX.DirectInput;
 using SlimDX.XInput;
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.Drawing;
+using System.Linq;
 
 namespace CGARenderer
 {
-    public class UserInput : IDisposable
+    public class Input : IDisposable
     {
         private bool _isDisposed = false;
         private DirectInput _directInput;
@@ -24,7 +24,7 @@ namespace CGARenderer
         private Gamepad _controller1StateCurrent;
         private Gamepad _controller1StateLast;
 
-        public UserInput()
+        public Input()
         {
             InitDirectInput();
             InitXInput();
@@ -44,18 +44,30 @@ namespace CGARenderer
         {
             _directInput = new DirectInput();
             if (_directInput == null)
-                return; // An error has occurred, initialization of DirectInput failed for some reason so simply return from this method.
-
-            // Create our keyboard and mouse devices.
+            {
+                throw new Exception("DirectInput initialization failed");
+            }
             _keyboard = new Keyboard(_directInput);
             if (_keyboard == null)
-                return;  // An error has occurred, initialization of the keyboard failed for some reason so simply return from this method.
-
+            {
+                throw new Exception("Keyboard creation failed");
+            }
             _mouse = new Mouse(_directInput);
             if (_mouse == null)
-                return; // An error has occurred, initialization of the mouse failed for some reason so simply return from this method.
-
-            GetJoysticks();
+            {
+                throw new Exception("Mouse creation failed");
+            }
+            var firstDevice = _directInput.GetDevices(DeviceClass.GameController, DeviceEnumerationFlags.AttachedOnly).FirstOrDefault();
+            if (firstDevice == null)
+            {
+                return;
+            }
+            _joystick1 = new Joystick(_directInput, firstDevice.InstanceGuid);
+            if (_joystick1 == null)
+            {
+                throw new Exception("Joystick creation failed");
+            }
+            _joystick1.Properties.SetRange(-1000, 1000);
         }
 
         private void InitXInput()
@@ -63,120 +75,24 @@ namespace CGARenderer
             _controller1 = new Controller(UserIndex.One);
         }
 
-        public void GetJoysticks()
-        {
-            IList<DeviceInstance> deviceList = _directInput.GetDevices(DeviceClass.GameController, DeviceEnumerationFlags.AttachedOnly);
-
-            for (int i = 0; i < deviceList.Count; i++)
-            {
-                if (i == 0)
-                {
-                    _joystick1 = new Joystick(_directInput, deviceList[0].InstanceGuid);
-                    if (_joystick1 == null)
-                        return;  // An error has occurred, initialization of the joystick failed for some reason so simply return from this method.
-
-
-                    // Set the range to use for all of the axis on our game controller.
-                    _joystick1.Properties.SetRange(-1000, 1000);
-                }
-            }
-        }
-
         public void Update()
         {
-            // Reacquire the devices in case another application has taken control of them and check for errors.
-            if (_keyboard.Acquire().IsFailure ||
-                _mouse.Acquire().IsFailure ||
-                _joystick1.Acquire().IsFailure)
+            if (_keyboard.Acquire().IsFailure || _mouse.Acquire().IsFailure || _joystick1.Acquire().IsFailure)
             {
-                // We failed to successfully acquire one of the devices so abort updating the user input stuff by simply returning from this method.
                 return;
             }
 
-            // Update our keyboard state variables.
             _keyboardStateLast = _keyboardStateCurrent;
             _keyboardStateCurrent = _keyboard.GetCurrentState();
 
-            // NOTE: All of the if statements below are for testing purposes.  In a real program, you would remove them or comment them out
-            //       and then recompile before releasing your game.  This is because we don't want debug code slowing down the finished game
-
-            // This is our test code for keyboard input via DirectInput.
-            if (IsKeyPressed(Key.Space))
-                Debug.WriteLine("DIRECTINPUT: KEY SPACE IS PRESSED!");
-            if (IsKeyHeldDown(Key.Space))
-                Debug.WriteLine("DIRECTINPUT: KEY SPACE IS HELD DOWN!");
-            if (IsKeyPressed(Key.Z))
-                Debug.WriteLine("DIRECTINPUT: KEY Z IS PRESSED!");
-
-            // Update our mouse state variables.
             _mouseStateLast = _mouseStateCurrent;
             _mouseStateCurrent = _mouse.GetCurrentState();
 
-            // This is our test code for mouse input via DirectInput.
-            if (IsMouseButtonPressed(0))
-                Debug.WriteLine("DIRECTINPUT: LEFT MOUSE BUTTON IS PRESSED!");
-            if (IsMouseButtonPressed(1))
-                Debug.WriteLine("DIRECTINPUT: RIGHT MOUSE BUTTON IS PRESSED!");
-            if (IsMouseButtonPressed(2))
-                Debug.WriteLine("DIRECTINPUT: MIDDLE MOUSE BUTTON IS PRESSED!");
-
-            // Update our DirectInput joystick state variables.
             _joy1StateLast = _joy1StateCurrent;
             _joy1StateCurrent = _joystick1.GetCurrentState();
 
-            // This is our test code for using a joystick with DirectInput.
-
-            // if you want to see the output from button presses.
-            //Debug.WriteLine("DIRECTINPUT: LEFT JOYSTICK POSITION - " + DI_LeftStickPosition().ToString());
-            //Debug.WriteLine("DIRECTINPUT: RIGHT JOYSTICK POSITION - " + DI_RightStickPosition().ToString());
-            //Debug.WriteLine("DIRECTINPUT: TRIGGERS AXIS - " + DI_TriggersAxis().ToString());
-
-            if (_joy1StateCurrent.IsPressed(0))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 0 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(1))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 1 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(2))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 2 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(3))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 3 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(4))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 4 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(5))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 5 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(6))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 6 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(7))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 7 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(8))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 8 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(9))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 9 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(10))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 10 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(11))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 11 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(12))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 12 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(13))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 13 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(14))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 14 IS PRESSED!");
-            if (_joy1StateCurrent.IsPressed(15))
-                Debug.WriteLine("DIRECTINPUT: BUTTON 15 IS PRESSED!");
-
-            // Update our XInput controller state variables.
             _controller1StateLast = _controller1StateCurrent;
             _controller1StateCurrent = _controller1.GetState().Gamepad;
-
-            // This is our test code for using a joystick with XInput.
-            if (XI_IsButtonPressed(GamepadButtonFlags.A))
-                Debug.WriteLine("XINPUT: THE A BUTTON IS PRESSED!!");
-            if (XI_IsButtonPressed(GamepadButtonFlags.B))
-                Debug.WriteLine("XINPUT: THE B BUTTON IS PRESSED!!");
-            if (XI_IsButtonPressed(GamepadButtonFlags.X))
-                Debug.WriteLine("XINPUT: THE X BUTTON IS PRESSED!!");
-            if (XI_IsButtonPressed(GamepadButtonFlags.Y))
-                Debug.WriteLine("XINPUT: THE Y BUTTON IS PRESSED!!");
         }
 
         public bool IsKeyPressed(Key key)
@@ -201,7 +117,12 @@ namespace CGARenderer
 
         public bool IsKeyHeldDown(Key key)
         {
-            return (_keyboardStateCurrent.IsPressed(key) && _keyboardStateLast.IsPressed(key));
+            return _keyboardStateCurrent.IsPressed(key) && _keyboardStateLast.IsPressed(key);
+        }
+
+        public bool IsKeyJustPressed(Key key)
+        {
+            return _keyboardStateCurrent.IsPressed(key) && !_keyboardStateLast.IsPressed(key);
         }
 
         public bool IsMouseButtonPressed(int button)
@@ -226,28 +147,29 @@ namespace CGARenderer
 
         public bool IsMouseButtonHeldDown(int button)
         {
-            return (_mouseStateCurrent.IsPressed(button) && _mouseStateLast.IsPressed(button));
+            return _mouseStateCurrent.IsPressed(button) && _mouseStateLast.IsPressed(button);
         }
 
         public bool MouseHasMoved()
         {
-            if ((_mouseStateCurrent.X != _mouseStateLast.X) ||
-                (_mouseStateCurrent.Y != _mouseStateLast.Y))
+            if ((_mouseStateCurrent.X != _mouseStateLast.X) || (_mouseStateCurrent.Y != _mouseStateLast.Y))
             {
                 return true;
             }
             else
+            {
                 return false;
+            }
         }
 
-        public Point MousePosition()
+        public Vector2 MousePosition()
         {
-            return new Point(_mouseStateCurrent.X, _mouseStateCurrent.Y);
+            return new Vector2(_mouseStateCurrent.X, _mouseStateCurrent.Y);
         }
 
-        public Point LastMousePosition()
+        public Vector2 LastMousePosition()
         {
-            return new Point(_mouseStateLast.X, _mouseStateLast.Y);
+            return new Vector2(_mouseStateLast.X, _mouseStateLast.Y);
         }
 
         public int MouseWheelMovement()
@@ -333,9 +255,9 @@ namespace CGARenderer
         public void Dispose()
         {
             Dispose(true);
-            // Since this Dispose() method already cleaned up the resources used by this object, there's no need for the
-            // Garbage Collector to call this class's Finalizer, so we tell it not to.
-            // We did not implement a Finalizer for this class as in our case we don't need to implement it.
+            // Since Dispose() method already cleaned up the resources used by object, there's no need for the
+            // Garbage Collector to call class's Finalizer, so we tell it not to.
+            // We did not implement a Finalizer for class as in our case we don't need to implement it.
             // The Finalize() method is used to give the object a chance to clean up its unmanaged resources before it
             // is destroyed by the Garbage Collector.  Since we are only using managed code, we do not need to
             // implement the Finalize() method.
@@ -344,7 +266,7 @@ namespace CGARenderer
 
         protected void Dispose(bool disposing)
         {
-            if (!this._isDisposed)
+            if (!_isDisposed)
             {
                 /*
                 * The following text is from MSDN  (http://msdn.microsoft.com/en-us/library/fs2xkftw%28VS.80%29.aspx)
