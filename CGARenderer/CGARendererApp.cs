@@ -1,41 +1,49 @@
-﻿using SlimDX;
+﻿using CGA;
+using SlimDX;
 using SlimDX.D3DCompiler;
 using SlimDX.Direct3D11;
 using SlimDX.DirectInput;
 using SlimDX.DXGI;
 using System;
-using System.Windows.Forms;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
 using Buffer = SlimDX.Direct3D11.Buffer;
 using Device = SlimDX.Direct3D11.Device;
 using Resource = SlimDX.Direct3D11.Resource;
+using Vector4 = SlimDX.Vector4;
+using Vector3 = SlimDX.Vector3;
+using Vector2 = SlimDX.Vector2;
 
 namespace CGARenderer
 {
     public class CGARendererApp : BaseApp, IDisposable
     {
         // is used to specify how we want to draw the cube.
-        private enum GraphicsMode
+        private enum ShadingModel
         {
-            SolidBlue = 0,
-            PerVertexColoring,
-            Textured
+            Lambert,
+            BlinnPhong
         }
 
         // struct stores data for a single vertex.
         private struct Vertex
         {
             public Vector4 Position;   // The position of the vertex in 3D space.
+            public Vector3 Normal;
             public Color4 Color;       // The color to use for vertex when we are not using textured mode.
             public Vector2 TexCoord;   // The textures coordinates for vertex.  We need these when we are using textured mode.
         }
 
         private const float _MoveSpeed = 0.01f;     // Sets the speed you move around at.
-        private const GraphicsMode _GraphicsMode = GraphicsMode.Textured;
+        private static readonly ShadingModel _ShadingModel = ShadingModel.Lambert;
         private const float _ZNear = 0.5f;
         private const float _Zfar = 1000.0f;
+        private const int _VertexSize = 52;
+        private const int _MatricesBufferSize = 64 * 3 + 16;
         private static readonly Vector3 _CameraTarget = new Vector3(0, 0, 0);
         private static readonly Vector3 _CameraUp = new Vector3(0, 1, 0);
-
+        private readonly IEnumerable<Shape> _shapes;
         private Device _device; // The Direct3D device.
         private DeviceContext _deviceContext; // is just a convenience member.  It holds the context for the Direct3D device.
         private RenderTargetView _renderTargetView; // Our render target.
@@ -45,25 +53,21 @@ namespace CGARenderer
         private VertexShader _vertexShader; // is the vertex shader.
         private ShaderSignature _vertexShaderSignature; // The vertex shader signature.
         private PixelShader _pixelShader; // is the pixel shader.
-        private Buffer _cbChangesOnResize;
-        private Buffer _cbChangesPerFrame;
-        private Buffer _cbChangesPerObject;
-        private DataStream _dataStream;
-        private Matrix _viewMatrix;  // is our view matrix.
-        private Matrix _projectionMatrix;  // The projection matrix.
-        private Matrix _modelMatrix;   // The world matrix for the cube.  controls the current position and rotation of the cube.
-        private Matrix _rotationMatrix;  // matrix controls the rotation of our cube.
+        private Buffer _matricesBuffer;
+        private DataStream _matricesBufferDataStream;
+        private Matrix _view;  // is our view matrix.
+        private Matrix _projection;  // The projection matrix.
         private Texture2D _depthStencilTexture = null;     // Holds the depth stencil texture.
         private DepthStencilView _depthStencilView = null; // The depth stencil view object.
-        private ShaderResourceView _texture;        // Holds the texture for our cube.
-        private SamplerState _textureSamplerState;      // The sampler state we will use with our cube texture.
-        private Buffer _vertexBuffer; // will hold our geometry.
+        private Buffer _boxVertexBuffer;
+        private Buffer _quadVertexBuffer;
         private static Vector3 _cameraPosition = new Vector3(0, 2, -5); // The position of our camera in 3D space.
-        private float _rotation = 0.005f; // The current rotation amount for the cube on the Y axis.
+        private float _rotationAngle = 0.005f; // The current rotation amount for the cube on the Y axis.
 
-        public CGARendererApp(string title, int width, int height, bool fullscreen)
+        public CGARendererApp(string title, int width, int height, bool fullscreen, IEnumerable<Shape> shapes)
             : base(title, width, height, fullscreen)
         {
+            _shapes = shapes;
             InitD3D();
             InitShaders();
             InitScene();
@@ -127,43 +131,19 @@ namespace CGARenderer
 
         public void InitConstantBuffers()
         {
-            // Create a buffer description.
             var bufferDescription = new BufferDescription
             {
                 Usage = ResourceUsage.Default,
                 BindFlags = BindFlags.ConstantBuffer,
                 CpuAccessFlags = CpuAccessFlags.None,
-                SizeInBytes = 64
+                SizeInBytes = _MatricesBufferSize
             };
-
-            // Create the changes on resize buffer.
-            _cbChangesOnResize = new Buffer(_device, bufferDescription);
-
-            // Create the changes per frame buffer.
-            _cbChangesPerFrame = new Buffer(_device, bufferDescription);
-
-            // Create the changes per object buffer.
-            _cbChangesPerObject = new Buffer(_device, bufferDescription);
-
-            // Send the Projection matrix into the changes on resize constant buffer.
-            _dataStream = new DataStream(64, true, true)
+            _matricesBuffer = new Buffer(_device, bufferDescription);
+            _deviceContext.VertexShader.SetConstantBuffer(_matricesBuffer, 1);
+            _matricesBufferDataStream = new DataStream(_MatricesBufferSize, true, true)
             {
                 Position = 0
             };
-            _dataStream.Write(Matrix.Transpose(_projectionMatrix));
-            _dataStream.Position = 0;
-            _device.ImmediateContext.UpdateSubresource(new DataBox(0, 0, _dataStream), _cbChangesOnResize, 0);
-
-            // Send the View matrix into the changes per frame buffer.
-            _dataStream.Position = 0;
-            _dataStream.Write(Matrix.Transpose(_viewMatrix));
-            _dataStream.Position = 0;
-            _device.ImmediateContext.UpdateSubresource(new DataBox(0, 0, _dataStream), _cbChangesPerFrame, 0);
-
-            // Tell the VertexShader to use our constant buffers.
-            _deviceContext.VertexShader.SetConstantBuffer(_cbChangesOnResize, 0);
-            _deviceContext.VertexShader.SetConstantBuffer(_cbChangesPerFrame, 1);
-            _deviceContext.VertexShader.SetConstantBuffer(_cbChangesPerObject, 2);
         }
 
         public void InitShaders()
@@ -186,14 +166,12 @@ namespace CGARenderer
 
             // Load and compile the pixel shader
             var pixelShaderName = "";
-            if (_GraphicsMode == GraphicsMode.SolidBlue)
-#pragma warning disable CS0162 // Unreachable code detected
-                pixelShaderName = "Pixel_Shader_Blue";
-            else if (_GraphicsMode == GraphicsMode.PerVertexColoring)
-                pixelShaderName = "Pixel_Shader_Color";
-#pragma warning restore CS0162 // Unreachable code detected
-            else if (_GraphicsMode == GraphicsMode.Textured)
-                pixelShaderName = "Pixel_Shader_Texture";
+            if (_ShadingModel == ShadingModel.Lambert)
+                pixelShaderName = "Pixel_Shader_Lambert";
+            else if (_ShadingModel == ShadingModel.BlinnPhong)
+                pixelShaderName = "Pixel_Shader_BlinnPhong";
+            else
+                throw new Exception($"Unknown {nameof(ShadingModel)}");
 
             using (var byteCode = ShaderBytecode.CompileFromFile("Effects.fx",
                 pixelShaderName,
@@ -212,132 +190,111 @@ namespace CGARenderer
             _deviceContext.PixelShader.Set(_pixelShader);
         }
 
+        private Buffer CreateVertexBuffer(IEnumerable<Vertex> vertices)
+        {
+            using (var dataStream = new DataStream(_VertexSize * vertices.Count(), true, true))
+            {
+                dataStream.Position = 0;
+                foreach (var vertex in vertices)
+                {
+                    dataStream.Write(vertex);
+                }
+                dataStream.Position = 0;
+                var bufferDescription = new BufferDescription
+                {
+                    Usage = ResourceUsage.Default,
+                    SizeInBytes = _VertexSize * vertices.Count(),
+                    BindFlags = BindFlags.VertexBuffer,
+                    CpuAccessFlags = CpuAccessFlags.None,
+                    OptionFlags = ResourceOptionFlags.None,
+                    StructureByteStride = _VertexSize
+                };
+                return new Buffer(_device, dataStream, bufferDescription);
+            }
+        }
+
         public void InitScene()
         {
             // Create our projection matrix.
-            _projectionMatrix = Matrix.PerspectiveFovLH((float)Math.PI * 0.5f, // is 90 degrees in radians
+            _projection = Matrix.PerspectiveFovLH((float)Math.PI * 0.5f, // is 90 degrees in radians
                 FormObject.Width / (float)FormObject.Height,
                 _ZNear,
                 _Zfar);
 
             // Create our view matrix.
-            _viewMatrix = Matrix.LookAtLH(_cameraPosition, _CameraTarget, _CameraUp);
+            _view = Matrix.LookAtLH(_cameraPosition, _CameraTarget, _CameraUp);
 
-            // Create the vertices of our cube.
-            Vertex[] vertexData =
+            _boxVertexBuffer = CreateVertexBuffer(new[]
             {
-                // Bottom face of the cube.
-                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 1) },
-                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 0) },
-                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 1) },
-                new Vertex() { Position = new Vector4( 1.0f, -1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 1.0f, 1.0f), TexCoord = new Vector2(1, 1) },
-                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 0) },
+                // Bottom face
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  1.0f, 1.0f), Normal = new Vector3(0, -1, 0), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Normal = new Vector3(0, -1, 0), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 1) },
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Normal = new Vector3(0, -1, 0), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 0) },
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Normal = new Vector3(0, -1, 0), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 1) },
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f, -1.0f, 1.0f), Normal = new Vector3(0, -1, 0), Color = new Color4(1.0f, 1.0f, 1.0f, 1.0f), TexCoord = new Vector2(1, 1) },
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Normal = new Vector3(0, -1, 0), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 0) },
 
-                // Front face of the cube.
-                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 1) },
-                new Vertex() { Position = new Vector4(-1.0f,  1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4( 1.0f, -1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 1.0f, 1.0f), TexCoord = new Vector2(1, 1) },
-                new Vertex() { Position = new Vector4(-1.0f,  1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Color = new Color4(0.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 0) },
-                new Vertex() { Position = new Vector4( 1.0f, -1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 1.0f, 1.0f), TexCoord = new Vector2(1, 1) },
+                // Front face
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Normal = new Vector3(0, 0, -1), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 1) },
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f, -1.0f, 1.0f), Normal = new Vector3(0, 0, -1), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f, -1.0f, 1.0f), Normal = new Vector3(0, 0, -1), Color = new Color4(1.0f, 1.0f, 1.0f, 1.0f), TexCoord = new Vector2(1, 1) },
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f, -1.0f, 1.0f), Normal = new Vector3(0, 0, -1), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Normal = new Vector3(0, 0, -1), Color = new Color4(0.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 0) },
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f, -1.0f, 1.0f), Normal = new Vector3(0, 0, -1), Color = new Color4(1.0f, 1.0f, 1.0f, 1.0f), TexCoord = new Vector2(1, 1) },
                 
-                // Right face of the cube.
-                new Vertex() { Position = new Vector4( 1.0f, -1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 1.0f, 1.0f), TexCoord = new Vector2(0, 1) },
-                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 1) },
-                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(1, 0) },
-                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 1) },
+                // Right face
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f, -1.0f, 1.0f), Normal = new Vector3(1, 0, 0), Color = new Color4(1.0f, 1.0f, 1.0f, 1.0f), TexCoord = new Vector2(0, 1) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Normal = new Vector3(1, 0, 0), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Normal = new Vector3(1, 0, 0), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 1) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Normal = new Vector3(1, 0, 0), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  1.0f, 1.0f), Normal = new Vector3(1, 0, 0), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(1, 0) },
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Normal = new Vector3(1, 0, 0), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 1) },
 
-                // Back face of the cube.
-                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(0, 1) },
-                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
-                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 0) },
-                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
+                // Back face
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  1.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(0, 1) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  1.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  1.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  1.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 0) },
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  1.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
 
-                // Left face of the cube.
-                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 1) },
-                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(1, 1) },
-                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4(-1.0f,  1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 0) },
-                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(1, 1) },
+                // Left face
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  1.0f, 1.0f), Normal = new Vector3(-1, 0, 0), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 1) },
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Normal = new Vector3(-1, 0, 0), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Normal = new Vector3(-1, 0, 0), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(1, 1) },
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Normal = new Vector3(-1, 0, 0), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f, -1.0f, 1.0f), Normal = new Vector3(-1, 0, 0), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(1, 0) },
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f, -1.0f, 1.0f), Normal = new Vector3(-1, 0, 0), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(1, 1) },
 
-                // Top face of the cube.
-                new Vertex() { Position = new Vector4(-1.0f,  1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(0, 1) },
-                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
-                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
-                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  1.0f, 1.0f), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(1, 0) },
-                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
-            };
+                // Top face
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f, -1.0f, 1.0f), Normal = new Vector3(0, 1, 0), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(0, 1) },
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Normal = new Vector3(0, 1, 0), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Normal = new Vector3(0, 1, 0), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  1.0f, 1.0f), Normal = new Vector3(0, 1, 0), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  1.0f, 1.0f), Normal = new Vector3(0, 1, 0), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(1, 0) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f, -1.0f, 1.0f), Normal = new Vector3(0, 1, 0), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
+            });
 
-            // Create a DataStream object that we will use to put the vertices into the vertex buffer.
-            var dataStream = new DataStream(40 * vertexData.Length, true, true)
+            _quadVertexBuffer = CreateVertexBuffer(new[]
             {
-                Position = 0
-            };
-            foreach (var vertex in vertexData)
-            {
-                dataStream.Write(vertex);
-            }
-            dataStream.Position = 0;
-
-            // Create a description for the vertex buffer.
-            var bufferDescription = new BufferDescription
-            {
-                Usage = ResourceUsage.Default,
-                SizeInBytes = 40 * vertexData.Length,
-                BindFlags = BindFlags.VertexBuffer,
-                CpuAccessFlags = CpuAccessFlags.None,
-                OptionFlags = ResourceOptionFlags.None,
-                StructureByteStride = 40
-            };
-
-            // Create the vertex buffer.
-            _vertexBuffer = new Buffer(_device, dataStream, bufferDescription);
-
-            // Dispose of the DataStream since we no longer need it.
-            dataStream.Dispose();
+                // Back face
+                new Vertex() { Position = new Vector4( 1.0f, -1.0f,  0.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 0.0f, 0.0f, 1.0f), TexCoord = new Vector2(0, 1) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  0.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  0.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
+                new Vertex() { Position = new Vector4( 1.0f,  1.0f,  0.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 1.0f, 0.0f, 0.0f), TexCoord = new Vector2(0, 0) },
+                new Vertex() { Position = new Vector4(-1.0f,  1.0f,  0.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 1.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 0) },
+                new Vertex() { Position = new Vector4(-1.0f, -1.0f,  0.0f, 1.0f), Normal = new Vector3(0, 0, 1), Color = new Color4(1.0f, 0.0f, 1.0f, 0.0f), TexCoord = new Vector2(1, 1) },
+            });
 
             // Define the vertex format.
             // tells Direct3D what information we are storing for each vertex, and how it is stored.
-            var inputElements = new InputElement[]
+            _inputLayout = new InputLayout(_device, _vertexShaderSignature, new InputElement[]
             {
                 new InputElement("POSITION", 0, Format.R32G32B32A32_Float, InputElement.AppendAligned, 0, InputClassification.PerVertexData, 0),
+                new InputElement("NORMAL",   0, Format.R32G32B32_Float,    InputElement.AppendAligned, 0, InputClassification.PerVertexData, 0),
                 new InputElement("COLOR",    0, Format.R32G32B32A32_Float, InputElement.AppendAligned, 0, InputClassification.PerVertexData, 0),
                 new InputElement("TEXCOORD", 0, Format.R32G32_Float,       InputElement.AppendAligned, 0, InputClassification.PerVertexData, 0)
-            };
-
-            // Create the InputLayout using the vertex format we just created.
-            _inputLayout = new InputLayout(_device, _vertexShaderSignature, inputElements);
-
-            // Setup the InputAssembler stage of the Direct3D 11 graphics pipeline.
-            _deviceContext.InputAssembler.InputLayout = _inputLayout;
-            _deviceContext.InputAssembler.SetVertexBuffers(0, new VertexBufferBinding(_vertexBuffer, 40, 0));
-            // Set the Primitive Topology.
-            _deviceContext.InputAssembler.PrimitiveTopology = PrimitiveTopology.TriangleList;
-
-            // Load the cube texture.
-            _texture = ShaderResourceView.FromFile(_device, Application.StartupPath + "\\Brick.png");
-
-            // Create a SamplerDescription
-            var samplerDescription = new SamplerDescription
-            {
-                Filter = Filter.MinMagMipLinear,
-                AddressU = TextureAddressMode.Wrap,
-                AddressV = TextureAddressMode.Wrap,
-                AddressW = TextureAddressMode.Wrap,
-                ComparisonFunction = Comparison.Never,
-                MinimumLod = 0,
-                MaximumLod = float.MaxValue
-            };
-
-            // Create our SamplerState
-            _textureSamplerState = SamplerState.FromDescription(_device, samplerDescription);
+            });
         }
 
         public void InitDepthStencil()
@@ -380,10 +337,10 @@ namespace CGARenderer
             base.UpdateScene(frameTime);
 
             // Keep the cube rotating by increasing its rotation amount
-            _rotation += 0.00025f;
-            if (_rotation > (2.0f * Math.PI))
+            _rotationAngle += 0.00025f;
+            if (_rotationAngle > (2.0f * Math.PI))
             {
-                _rotation = 0.0f;
+                _rotationAngle = 0.0f;
             }
 
             // Check for user input.
@@ -401,19 +358,39 @@ namespace CGARenderer
             }
 
             // Update the view matrix.
-            _viewMatrix = Matrix.LookAtLH(_cameraPosition, new Vector3(0, 0, 0), new Vector3(0, 1, 0));
+            _view = Matrix.LookAtLH(_cameraPosition, new Vector3(0, 0, 0), new Vector3(0, 1, 0));
+        }
 
-            // Send the updated view matrix into its constant buffer.
-            _dataStream.Position = 0;
-            _dataStream.Write(Matrix.Transpose(_viewMatrix));
-            _dataStream.Position = 0;
-            _device.ImmediateContext.UpdateSubresource(new DataBox(0, 0, _dataStream), _cbChangesPerFrame, 0);
+        private void UpdateMatrices(Matrix model)
+        {
+            var modelView = model * _view;
+            var modelViewProjection = model * _view * _projection;
 
-            // Update the cube's rotation matrix.
-            _rotationMatrix = Matrix.RotationAxis(new Vector3(0.0f, 1.0f, 0.0f), _rotation);
+            _matricesBufferDataStream.Position = 0;
+            _matricesBufferDataStream.Write(Matrix.Transpose(model));
+            _matricesBufferDataStream.Write(Matrix.Invert(modelView));
+            _matricesBufferDataStream.Write(Matrix.Transpose(modelViewProjection));
+            _matricesBufferDataStream.Write(_cameraPosition);
+            _matricesBufferDataStream.Position = 0;
+            _device.ImmediateContext.UpdateSubresource(new DataBox(0, 0, _matricesBufferDataStream), _matricesBuffer, 0);
+        }
 
-            // Update the cube's world matrix with the new translation and rotation matrices.
-            _modelMatrix = _rotationMatrix;
+        private void DrawBox(Matrix model)
+        {
+            UpdateMatrices(model);
+            _deviceContext.InputAssembler.InputLayout = _inputLayout;
+            _deviceContext.InputAssembler.SetVertexBuffers(0, new VertexBufferBinding(_boxVertexBuffer, _VertexSize, 0));
+            _deviceContext.InputAssembler.PrimitiveTopology = PrimitiveTopology.TriangleList;
+            _deviceContext.Draw(36, 0);
+        }
+
+        private void DrawQuad(Matrix model)
+        {
+            UpdateMatrices(model);
+            _deviceContext.InputAssembler.InputLayout = _inputLayout;
+            _deviceContext.InputAssembler.SetVertexBuffers(0, new VertexBufferBinding(_quadVertexBuffer, _VertexSize, 0));
+            _deviceContext.InputAssembler.PrimitiveTopology = PrimitiveTopology.TriangleList;
+            _deviceContext.Draw(6, 0);
         }
 
         public override void RenderScene()
@@ -427,20 +404,31 @@ namespace CGARenderer
             _deviceContext.ClearRenderTargetView(_renderTargetView, ClearColor);
             _deviceContext.ClearDepthStencilView(_depthStencilView, DepthStencilClearFlags.Depth, 1.0f, 0);
 
-            _deviceContext.PixelShader.SetShaderResource(_texture, 0);
-            _deviceContext.PixelShader.SetSampler(_textureSamplerState, 0);
-
-            // Send the cube's world matrix to the changes per object constant buffer.
-            _dataStream.Position = 0;
-            _dataStream.Write(Matrix.Transpose(_modelMatrix));
-            _dataStream.Position = 0;
-            _device.ImmediateContext.UpdateSubresource(new DataBox(0, 0, _dataStream), _cbChangesPerObject, 0);
-
-            // Draw the triangle that we created in our vertex buffer.
-            _deviceContext.Draw(36, 0);
+            foreach (var shape in _shapes)
+            {
+                var model = ToSlimDXMatrix(shape.Transform);
+                if (shape.GetType() == typeof(Box))
+                {
+                    DrawBox(model);
+                }
+                else if (shape.GetType() == typeof(Quad))
+                {
+                    DrawQuad(model);
+                }
+            }
 
             // Present the frame we just rendered to the user.
             _swapChain.Present(0, PresentFlags.None);
+        }
+
+        private Matrix ToSlimDXMatrix(Matrix4x4 matrix)
+        {
+            return new Matrix() {
+                M11 = matrix.M11, M12 = matrix.M12, M13 = matrix.M13, M14 = matrix.M14,
+                M21 = matrix.M21, M22 = matrix.M22, M23 = matrix.M23, M24 = matrix.M24,
+                M31 = matrix.M31, M32 = matrix.M32, M33 = matrix.M33, M34 = matrix.M34,
+                M41 = matrix.M41, M42 = matrix.M42, M43 = matrix.M43, M44 = matrix.M44,
+            };
         }
 
         public override void ToggleFullscreen()
@@ -473,8 +461,8 @@ namespace CGARenderer
                     if (_pixelShader != null)
                         _pixelShader.Dispose();
 
-                    if (_vertexBuffer != null)
-                        _vertexBuffer.Dispose();
+                    if (_boxVertexBuffer != null)
+                        _boxVertexBuffer.Dispose();
 
                     if (_swapChain != null)
                         _swapChain.Dispose();
@@ -485,29 +473,17 @@ namespace CGARenderer
                     if (_inputLayout != null)
                         _inputLayout.Dispose();
 
-                    if (_cbChangesOnResize != null)
-                        _cbChangesOnResize.Dispose();
+                    if (_matricesBuffer != null)
+                        _matricesBuffer.Dispose();
 
-                    if (_cbChangesPerFrame != null)
-                        _cbChangesPerFrame.Dispose();
-
-                    if (_cbChangesPerObject != null)
-                        _cbChangesPerObject.Dispose();
-
-                    if (_dataStream != null)
-                        _dataStream.Dispose();
+                    if (_matricesBufferDataStream != null)
+                        _matricesBufferDataStream.Dispose();
 
                     if (_depthStencilTexture != null)
                         _depthStencilTexture.Dispose();
 
                     if (_depthStencilView != null)
                         _depthStencilView.Dispose();
-
-                    if (_texture != null)
-                        _texture.Dispose();
-
-                    if (_textureSamplerState != null)
-                        _textureSamplerState.Dispose();
 
                     if (_device != null)
                         _device.Dispose();
