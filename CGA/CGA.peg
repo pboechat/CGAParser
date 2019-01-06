@@ -14,66 +14,58 @@
 	}
 }
 
-RParseTree <ParseTree> = productions:RProductionRule<0,,_> { new ParseTree(productions) }
+R_ParseTree <ParseTree> = productions:R_ProductionRule<0,,_> { new ParseTree(productions) }
 
-RProductionRule <ProductionRule> = _ predecessor:RSymbol _ "-->" _ successors:RSuccessor<1,,_> _ ";" { new ProductionRule(predecessor, successors) }
+R_ProductionRule <ProductionRule> = _ predecessor:R_Symbol _ "-->" _ successors:R_ISymbol<1,,_> _ ";" { new ProductionRule(predecessor, successors) }
 
-RTranslate <Operation> = "t" _ "(" _ params:RExp<3, 3, _ "," _> _ ")" { new Translate("t", @params.Cast<object>().ToList()) }
+R_TOperation <TOperation> = "t" _ "(" _ params:R_IMathExp<3, 3, _ "," _> _ ")" { new TOperation("t", @params.Cast<object>().ToList()) }
 
-RRotate <Operation> = "r" _ "(" _ params:RExp<3, 3, _ "," _> _ ")" _ { new Rotate("r", @params.Cast<object>().ToList()) }
+R_ROperation <ROperation> = "r" _ "(" _ params:R_IMathExp<3, 3, _ "," _> _ ")" _ { new ROperation("r", @params.Cast<object>().ToList()) }
 
-RScale <Operation> = "s" _ "(" _ params:RExp<3, 3, _ "," _> _ ")" _ { new Scale("s", @params.Cast<object>().ToList()) }
+R_SOperation <SOperation> = "s" _ "(" _ params:R_IMathExp<3, 3, _ "," _> _ ")" _ { new SOperation("s", @params.Cast<object>().ToList()) }
 
-RExtrude <Operation> = "extrude" _ "(" _ params:RExp<1, 2, _ "," _> _ ")" _ { new Extrude("extrude", @params.Cast<object>().ToList()) }
+R_ExtrudeOperation <ShapeOperation> = "extrude" _ "(" _ params:R_IMathExp<1, 2, _ "," _> _ ")" _ { new ExtrudeOperation("extrude", @params.Cast<object>().ToList()) }
 
-RCompSplit <Operation> = "comp" _ "(" _ selector:RCompSel _ ")" _ "{" _ args:RCompSplitArg<0,, _ "|" _> _ "}" { new CompSplit("comp", new List<object>() { selector }.Union(args.Cast<object>()).ToList()) }
+R_ComponentSplitOperation <ComponentSplitOperation> = "comp" _ "(" _ selector:R_ComponentSelector _ ")" _ "{" _ args:R_ComponentSplitArg<0,, _ "|" _> _ "}" { new ComponentSplitOperation("comp", new List<object>() { selector }.Union(args.Cast<object>()).ToList()) }
 
-RCompSplitArg <CompSplitArg> = selector:RSemSel _ (":" / "=") _ successor:RSuccessor { new CompSplitArg(selector, successor) }
+R_ComponentSplitArg <ComponentSplitArg> = selector:R_SemanticSelector _ (":" / "=") _ successor:R_ISymbol { new ComponentSplitArg(selector, successor) }
 
-RCompSel <ComponentSelector> = value:("f"i / "e"i / "v"i) { (ComponentSelector)value.ToUpper()[0] }
+R_ComponentSelector <ComponentSelector> -memoize = value:("f"i / "e"i / "v"i) { (ComponentSelector)value.ToUpper()[0] }
 
-RSemSel <SemanticSelector> = value:("front"i / "back"i / "left"i / "right"i / "top"i / "bottom"i / "vertical"i / "horizontal"i / "side"i / "all"i) { ParseEnum<SemanticSelector>(value) }
+R_SemanticSelector <SemanticSelector> -memoize = value:("front"i / "back"i / "left"i / "right"i / "top"i / "bottom"i / "vertical"i / "horizontal"i / "side"i / "all"i) { ParseEnum<SemanticSelector>(value) }
 
-RSplit <Operation> = "split" _ "(" _ params:RSplitParams _ ")" _ pattern:RSplitPattern { new Split("split", @params.Union(new object[] { pattern }).ToList()) }
+R_SplitOperation <SplitOperation> = "split" _ "(" _ params:R_SplitOperationParams _ ")" _ pattern:R_SplitPattern { new SplitOperation("split", @params.Union(new object[] { pattern }).ToList()) }
 
-RSplitParams <IEnumerable<object>> = axis:RAxis { new object[] { axis } } / axis:RAxis _ "," _ adjust:RAdjSel { new object[] { axis, adjust } }
+R_SplitOperationParams <IEnumerable<object>> = axis:R_Axis { new object[] { axis } } / axis:R_Axis _ "," _ adjust:R_AdjustSelector { new object[] { axis, adjust } }
 
-RAdjSel <AdjustSelector> = value:("adjust" / "noAdjust") { ParseEnum<AdjustSelector>(value) }
+R_AdjustSelector <AdjustSelector> -memoize = value:("adjust"i / "noadjust"i) { ParseEnum<AdjustSelector>(value) }
 
-RSplitter <ISplitter> = RSplitStep / RSplitPattern
+R_ISplitter <ISplitter> = R_SplitStep / R_SplitPattern
 
-RSplitPattern <SplitPattern> = "{" _ steps:RSplitter<0,, _ "|" _> _ "}" _ switch:"*"? { new SplitPattern(steps, @switch.Count > 0) }
+R_SplitPattern <SplitPattern> = "{" _ steps:R_ISplitter<0,, _ "|" _> _ "}" _ switch:"*"? { new SplitPattern(steps, @switch.Count > 0) }
 
-RSplitStep <SplitStep> = prefix:RSizePrefix? _ value:RExp _ ":" _ successor:RSuccessor { new SplitStep(prefix.Count == 0 ? (SizePrefix?)null : prefix[0], value, successor) }
+R_SplitStep <SplitStep> = prefix:R_SizePrefix? _ value:R_IMathExp _ ":" _ successor:R_ISymbol { new SplitStep(prefix.Count == 0 ? (SizePrefix?)null : prefix[0], value, successor) }
 
-RSizePrefix <SizePrefix> = value:("~" / "'") { (SizePrefix)value.ToUpper()[0] }
+R_SizePrefix <SizePrefix> -memoize = value:("~" / "'") { (SizePrefix)value.ToUpper()[0] }
 
-ROperation <Operation> = RTranslate / RRotate / RScale / RExtrude / RCompSplit / RSplit
+R_ShapeOperation <ShapeOperation> = R_TOperation / R_ROperation / R_SOperation / R_ExtrudeOperation / R_ComponentSplitOperation / R_SplitOperation
 
-RSymbol <Symbol> = name:RIdentifier { new Symbol(name) }
+R_Symbol <Symbol> = name:R_Identifier { new Symbol(name) }
 
-RSuccessor <ISymbol> = ROperation / RSymbol
+R_ISymbol <ISymbol> = R_ShapeOperation / R_Symbol
 
-RExp <float> -memoize = lval:RExp _ op:RExpOperation _ rval:RExp { op(lval, rval) } / "(" _ value:RExp _ ")" { value } / value:RExpOperand { value }
+R_AlgebraicOperationType <AlgebraicOperationType> -memoize = value:("+" / "-" / "*" / "/" / "^" / "%") { (AlgebraicOperationType)value[0] }
 
-RExpOperation <Func<float, float, float>> = value:("+" / "-" / "*" / "/" / "%" / "^") {{
-	if (value == "+") { return (a, b) => a + b; }
-	else if (value == "-") { return (a, b) => a - b; }
-	else if (value == "*") { return (a, b) => a * b; }
-	else if (value == "/") { return (a, b) => a / b; }
-	else if (value == "%") { return (a, b) => a % b; }
-	else if (value == "^") { return (a, b) => (float)Math.Pow(a, b); }
-	else { throw new Exception("Unknown operation"); }
-}}
+R_ConstMathExpValue <float> -memoize = value:R_Float / R_NIL { 0 } / value:R_Axis { (float)value }
 
-RExpOperand <float> = RFloat / "-" _ value:RExpOperand { -value } / "(" _ value:RExpOperand _ ")" { value } / value:RAxis { (float)value } / value:RNIL { 0 }
+R_IMathExp <IMathExp> -memoize = leftOperand:R_IMathExp _ type:R_AlgebraicOperationType _ rightOperand:R_IMathExp { new AlgebraicOperation(type, leftOperand, rightOperand) } / value:R_ConstMathExpValue { new ConstMathExp(value) } / "(" _ value:R_IMathExp _ ")" {{ value.Parenthesized = true; return value; }} / "-" _ value:R_IMathExp {{ value.Negated = true; return value; }}
 
-RAxis <Axis> = value:("X"i / "Y"i / "Z"i) { ParseEnum<Axis>(value) }
+R_Axis <Axis> = value:("x"i / "y"i / "z"i) { ParseEnum<Axis>(value) }
 
-RIdentifier <string> -memoize = value: ([a-zA-Z]+) { string.Join("", value) }
+R_Identifier <string> -memoize = value: ([a-zA-Z]+) { string.Join("", value) }
 
-RNIL <object> -memoize = "NIL"i { null }
+R_NIL <object> -memoize = "nil"i { null }
 
-RFloat <float> -memoize = value:([-]?[0-9]+("."[0-9]*)?) { float.Parse(value) }
+R_Float <float> -memoize = value:([-]?[0-9]+("."[0-9]*)?) { float.Parse(value) }
 
 _ -memoize = [ \t\r\n]*

@@ -1,5 +1,5 @@
 ﻿a --> comp(f) { all: b };
 
-b --> extrude(Z, 0.1) c;
+b --> extrude(Z, 0.1) z;
 
-c --> t(0, 0.2, 0) d;
+c --> t(0, 0, 0) d;

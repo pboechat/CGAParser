@@ -137,6 +137,101 @@ namespace CGA
         public abstract Shape Copy();
     }
 
+    public interface IMathExp
+    {
+        bool Negated { get; set; }
+        bool Parenthesized { get; set; }
+        float Evaluate(Shape shape);
+    }
+
+    public class ConstMathExp : IMathExp
+    {
+        private readonly float _value;
+        public bool Negated { get; set; }
+        public bool Parenthesized { get; set; }
+
+        public ConstMathExp(float value)
+        {
+            _value = value;
+        }
+
+
+        public float Evaluate(Shape shape)
+        {
+            return Negated ? -_value : _value;
+        }
+
+        public override string ToString() => (Negated ? "-" : "") + (Parenthesized ? "(" + _value.ToString() + ")" : _value.ToString());
+    }
+
+    public class VarMathExp : IMathExp
+    {
+        public bool Negated { get; set; }
+        public bool Parenthesized { get; set; }
+
+        public float Evaluate(Shape shape)
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+    public enum AlgebraicOperationType
+    {
+        ADDITION = '+',
+        SUBTRACTION = '-',
+        MULTIPLICATION = '*',
+        DIVISION = '/',
+        EXPONENTIATION = '^',
+        MODULO = '%'
+    }
+
+    public class AlgebraicOperation : IMathExp
+    {
+        private readonly AlgebraicOperationType _type;
+        private readonly IMathExp _leftOperand;
+        private readonly IMathExp _rightOperand;
+        public bool Negated { get; set; }
+        public bool Parenthesized { get; set; }
+
+        public AlgebraicOperation(AlgebraicOperationType type, IMathExp leftOperand, IMathExp rightOperand, bool negated = false, bool parenthesized = false)
+        {
+            _type = type;
+            _leftOperand = leftOperand ?? throw new ArgumentNullException(nameof(leftOperand));
+            _rightOperand = rightOperand ?? throw new ArgumentNullException(nameof(leftOperand));
+            Parenthesized = parenthesized;
+        }
+
+        public float Evaluate(Shape shape)
+        {
+            float value;
+            switch (_type)
+            {
+                case AlgebraicOperationType.ADDITION:
+                    value = _leftOperand.Evaluate(shape) + _rightOperand.Evaluate(shape);
+                    break;
+                case AlgebraicOperationType.SUBTRACTION:
+                    value = _leftOperand.Evaluate(shape) - _rightOperand.Evaluate(shape);
+                    break;
+                case AlgebraicOperationType.MULTIPLICATION:
+                    value = _leftOperand.Evaluate(shape) * _rightOperand.Evaluate(shape);
+                    break;
+                case AlgebraicOperationType.DIVISION:
+                    value = _leftOperand.Evaluate(shape) / _rightOperand.Evaluate(shape);
+                    break;
+                case AlgebraicOperationType.EXPONENTIATION:
+                    value = (float)Math.Pow(_leftOperand.Evaluate(shape), _rightOperand.Evaluate(shape));
+                    break;
+                case AlgebraicOperationType.MODULO:
+                    value = _leftOperand.Evaluate(shape) % _rightOperand.Evaluate(shape);
+                    break;
+                default:
+                    throw new Exception($"Unknown {nameof(AlgebraicOperationType)}: {_type}");
+            }
+            return Negated ? -value : value;
+        }
+
+        public override string ToString() => $"{(Parenthesized ? "( " : "")}{_leftOperand.ToString()} {(char)_type} {_rightOperand.ToString()}{(Parenthesized ? " )" : "")}";
+    }
 
     public class Quad : Shape
     {
@@ -189,8 +284,7 @@ namespace CGA
 
         public override bool Equals(object obj)
         {
-            var other = obj as Symbol;
-            if (other == null)
+            if (!(obj is Symbol other))
             {
                 return false;
             }
@@ -203,12 +297,12 @@ namespace CGA
         }
     }
 
-    public abstract class Operation : ISymbol
+    public abstract class ShapeOperation : ISymbol
     {
         public string Operand { get; }
         public IList<object> Params { get; }
 
-        public Operation(string operand, IList<object> @params)
+        public ShapeOperation(string operand, IList<object> @params)
         {
             Operand = operand ?? throw new ArgumentNullException(nameof(operand));
             Params = @params ?? throw new ArgumentNullException(nameof(@params)); ;
@@ -227,60 +321,60 @@ namespace CGA
         }
     }
 
-    public abstract class SRT : Operation
+    public abstract class SRTOperation : ShapeOperation
     {
-        public float X => GetParam<float>(0);
-        public float Y => GetParam<float>(1);
-        public float Z => GetParam<float>(2);
+        public float X(Shape shape) => GetParam<IMathExp>(0).Evaluate(shape);
+        public float Y(Shape shape) => GetParam<IMathExp>(1).Evaluate(shape);
+        public float Z(Shape shape) => GetParam<IMathExp>(2).Evaluate(shape);
 
-        public SRT(string operand, IList<object> @params) : base(operand, @params)
+        public SRTOperation(string operand, IList<object> @params) : base(operand, @params)
         {
         }
     }
 
-    public class Translate : SRT
+    public class TOperation : SRTOperation
     {
-        public Translate(string operand, IList<object> @params) : base(operand, @params)
+        public TOperation(string operand, IList<object> @params) : base(operand, @params)
         {
         }
 
         public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
-            var T = Matrix4x4.CreateTranslation(new Vector3(X, Y, Z));
             var shape = context.PopShape();
+            var T = Matrix4x4.CreateTranslation(new Vector3(X(shape), Y(shape), Z(shape)));
             shape.Transform = T * shape.Transform;
             context.PushShape(shape);
             return null;
         }
     }
 
-    public class Rotate : SRT
+    public class ROperation : SRTOperation
     {
-        public Rotate(string operand, IList<object> @params) : base(operand, @params)
+        public ROperation(string operand, IList<object> @params) : base(operand, @params)
         {
         }
 
         public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
-            var R = Matrix4x4.CreateFromYawPitchRoll(Y.ToRadians(), X.ToRadians(), Z.ToRadians());
             var shape = context.PopShape();
+            var R = Matrix4x4.CreateFromYawPitchRoll(Y(shape).ToRadians(), X(shape).ToRadians(), Z(shape).ToRadians());
             shape.Transform = R * shape.Transform;
             context.PushShape(shape);
             return null;
         }
     }
 
-    public class Scale : SRT
+    public class SOperation : SRTOperation
     {
-        public Scale(string operand, IList<object> @params) : base(operand, @params)
+        public SOperation(string operand, IList<object> @params) : base(operand, @params)
         {
         }
 
         public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
-            var newShape = context.PopShape();
-            newShape.Size = new Vector3(X, Y, Z);
-            context.PushShape(newShape);
+            var shape = context.PopShape();
+            shape.Size = new Vector3(X(shape), Y(shape), Z(shape));
+            context.PushShape(shape);
             return null;
         }
     }
@@ -300,7 +394,7 @@ namespace CGA
             }
             return new Box
             {
-                Transform = Matrix4x4.CreateRotationX((float)Math.PI * -0.5f) * Matrix4x4.CreateTranslation(0, distance * 0.5f, 0) * parentShape.Transform,
+                Transform = Matrix4x4.CreateTranslation(0, distance * 0.5f, 0) * Matrix4x4.CreateRotationX((float)Math.PI * 0.5f) * parentShape.Transform,
                 Size = parentShape.Size.SetElement((int)Axis.Y, distance)
             };
         }
@@ -318,12 +412,12 @@ namespace CGA
         }
     }
 
-    public class Extrude : Operation
+    public class ExtrudeOperation : ShapeOperation
     {
-        public Axis Axis => (Params.Count == 1) ? Axis.Z : (Axis)GetParam<float>(0);
-        public float Distance => (Params.Count == 1) ? GetParam<float>(0) : GetParam<float>(1);
+        public Axis Axis(Shape shape) => (Params.Count == 1) ? CGA.Axis.Z : (Axis)GetParam<IMathExp>(0).Evaluate(shape);
+        public float Distance(Shape shape) => (Params.Count == 1) ? GetParam<IMathExp>(0).Evaluate(shape) : GetParam<IMathExp>(1).Evaluate(shape);
 
-        public Extrude(string operand, IList<object> @params) : base(operand, @params)
+        public ExtrudeOperation(string operand, IList<object> @params) : base(operand, @params)
         {
         }
 
@@ -331,17 +425,17 @@ namespace CGA
         {
             var shape = context.PopShape();
             var extrusionStrategy = ExtrusionStrategyFactory.Create(shape.GetType());
-            context.PushShape(extrusionStrategy.Extrude(shape, Axis, Distance));
+            context.PushShape(extrusionStrategy.Extrude(shape, Axis(shape), Distance(shape)));
             return null;
         }
     }
 
-    public class CompSplitArg
+    public class ComponentSplitArg
     {
         public SemanticSelector Selector { get; }
         public ISymbol Successor { get; }
 
-        public CompSplitArg(SemanticSelector selector, ISymbol successor)
+        public ComponentSplitArg(SemanticSelector selector, ISymbol successor)
         {
             Selector = selector;
             Successor = successor ?? throw new ArgumentNullException(nameof(successor));
@@ -361,42 +455,45 @@ namespace CGA
         {
             if (selector == ComponentSelector.FACES)
             {
+                var halfWidth = parentShape.Size.X * 0.5f;
+                var halfHeight = parentShape.Size.Y * 0.5f;
+                var halfDepth = parentShape.Size.Z * 0.5f;
                 var quads = new List<Quad>
                 {
-                    // top
-                    new Quad()
-                    {
-                        Transform = Matrix4x4.CreateRotationX((float)Math.PI * -0.5f) * Matrix4x4.CreateTranslation(0, parentShape.Size.Y * 0.5f, 0) * parentShape.Transform,
-                        Size = new Vector3(parentShape.Size.X, 1, parentShape.Size.Z)
-                    },
                     // bottom
                     new Quad()
                     {
-                        Transform = Matrix4x4.CreateRotationX((float)Math.PI * 0.5f) * Matrix4x4.CreateTranslation(0, -parentShape.Size.Y * -0.5f, 0) * parentShape.Transform,
+                        Transform = Matrix4x4.CreateTranslation(0, 0, halfHeight) * Matrix4x4.CreateRotationX((float)Math.PI * 0.5f) * parentShape.Transform,
+                        Size = new Vector3(parentShape.Size.X, 1, parentShape.Size.Z)
+                    },
+                    // top
+                    new Quad()
+                    {
+                        Transform = Matrix4x4.CreateTranslation(0, 0, halfHeight) * Matrix4x4.CreateRotationX((float)Math.PI * -0.5f) * parentShape.Transform,
                         Size = new Vector3(parentShape.Size.X, 1, parentShape.Size.Z)
                     },
                     // back
                     new Quad()
                     {
-                        Transform = Matrix4x4.CreateTranslation(0, 0, parentShape.Size.Z * 0.5f) * parentShape.Transform,
+                        Transform = Matrix4x4.CreateTranslation(0, 0, halfDepth) * parentShape.Transform,
                         Size = new Vector3(parentShape.Size.X, 1, parentShape.Size.Z)
                     },
                     // front
                     new Quad()
                     {
-                        Transform = Matrix4x4.CreateRotationY(-(float)Math.PI) * Matrix4x4.CreateTranslation(0, 0, parentShape.Size.Z * -0.5f) * parentShape.Transform,
+                        Transform = Matrix4x4.CreateTranslation(0, 0, halfDepth) * Matrix4x4.CreateRotationY(-(float)Math.PI) * parentShape.Transform,
                         Size = new Vector3(parentShape.Size.X, 1, parentShape.Size.Z)
                     },
                     // right
                     new Quad()
                     {
-                        Transform = Matrix4x4.CreateRotationY((float)Math.PI * 0.5f) * Matrix4x4.CreateTranslation(parentShape.Size.X * 0.5f, 0, 0) * parentShape.Transform,
+                        Transform = Matrix4x4.CreateTranslation(0, 0, halfWidth) * Matrix4x4.CreateRotationY((float)Math.PI * 0.5f) * parentShape.Transform,
                         Size = new Vector3(parentShape.Size.Z, 1, parentShape.Size.X)
                     },
                     // left
                     new Quad()
                     {
-                        Transform = Matrix4x4.CreateRotationY((float)Math.PI * -0.5f) * Matrix4x4.CreateTranslation(parentShape.Size.X * -0.5f, 0, 0) * parentShape.Transform,
+                        Transform = Matrix4x4.CreateTranslation(0, 0, halfWidth) * Matrix4x4.CreateRotationY((float)Math.PI * -0.5f) * parentShape.Transform,
                         Size = new Vector3(parentShape.Size.Z, 1, parentShape.Size.X)
                     },
                 };
@@ -428,11 +525,6 @@ namespace CGA
         private static readonly float _Epsilon = 0.0001f;
         private static readonly float _DotThreshold = 1 - _Epsilon;
 
-        public static int GetSide(Vector3 a, Vector3 b, Vector3 c)
-        {
-            return Math.Sign(a.X * b.Y * c.Z + a.Y * b.Z * c.X + a.Z * b.X * c.Y - a.Z * b.Y * c.X - a.Y * b.X * c.Z - a.X * b.Z * c.Y);
-        }
-
         public bool Select(Shape parentShape, Shape componentShape, SemanticSelector selector)
         {
             var componentShapeType = componentShape.GetType();
@@ -443,17 +535,29 @@ namespace CGA
             var cN = componentShape.Transform.GetZAxis();
             switch (selector)
             {
-                case SemanticSelector.FRONT:
+                case SemanticSelector.BOTTOM:
                     {
-                        var pZ = parentShape.Transform.GetZAxis();
-                        var dot = Vector3.Dot(pZ, cN);
-                        return dot >= _DotThreshold; /* Z and N are almost parallel and point to opposite directions */
+                        var pY = parentShape.Transform.GetYAxis();
+                        var dot = Vector3.Dot(pY, cN);
+                        return dot <= -_DotThreshold; /* Y and N are almost parallel and point to same direction */
+                    }
+                case SemanticSelector.TOP:
+                    {
+                        var pY = parentShape.Transform.GetYAxis();
+                        var dot = Vector3.Dot(pY, cN);
+                        return dot >= _DotThreshold; /* Y and N are almost parallel and point to opposite directions */
                     }
                 case SemanticSelector.BACK:
                     {
                         var pZ = parentShape.Transform.GetZAxis();
                         var dot = Vector3.Dot(pZ, cN);
                         return dot <= -_DotThreshold; /* Z and N are almost parallel and point to same direction */
+                    }
+                case SemanticSelector.FRONT:
+                    {
+                        var pZ = parentShape.Transform.GetZAxis();
+                        var dot = Vector3.Dot(pZ, cN);
+                        return dot >= _DotThreshold; /* Z and N are almost parallel and point to opposite directions */
                     }
                 case SemanticSelector.RIGHT:
                     {
@@ -466,18 +570,6 @@ namespace CGA
                         var pX = parentShape.Transform.GetXAxis();
                         var dot = Vector3.Dot(pX, cN);
                         return dot <= -_DotThreshold; /* X and N are almost parallel and point to opposite directions */
-                    }
-                case SemanticSelector.TOP:
-                    {
-                        var pY = parentShape.Transform.GetYAxis();
-                        var dot = Vector3.Dot(pY, cN);
-                        return dot >= _DotThreshold; /* Y and N are almost parallel and point to same direction */
-                    }
-                case SemanticSelector.BOTTOM:
-                    {
-                        var pY = parentShape.Transform.GetYAxis();
-                        var dot = Vector3.Dot(pY, cN);
-                        return dot <= -_DotThreshold; /* Y and N are almost parallel and point to opposite directions */
                     }
                 case SemanticSelector.HORIZONTAL:
                     {
@@ -512,12 +604,12 @@ namespace CGA
         }
     }
 
-    public class CompSplit : Operation
+    public class ComponentSplitOperation : ShapeOperation
     {
         public ComponentSelector Selector => GetParam<ComponentSelector>(0);
-        public IEnumerable<CompSplitArg> Args => Params.Skip(1).Cast<CompSplitArg>();
+        public IEnumerable<ComponentSplitArg> Args => Params.Skip(1).Cast<ComponentSplitArg>();
 
-        public CompSplit(string operand, IList<object> @params) : base(operand, @params)
+        public ComponentSplitOperation(string operand, IList<object> @params) : base(operand, @params)
         {
         }
 
@@ -550,10 +642,10 @@ namespace CGA
 
     public interface ISplitter
     {
-        Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape shape, float offset);
-        float GetRelativeStep();
-        float GetAbsoluteSize();
-        void ComputeAbsoluteSize(float absoluteSizeLeft, float relativeStepsSum);
+        Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset);
+        float GetRelativeStep(Shape parentShape);
+        float GetAbsoluteSize(Shape parentShape);
+        void ComputeAbsoluteSize(Shape parentShape, float absoluteSizeLeft, float relativeStepsSum);
     }
 
     public interface ISplitStrategy
@@ -592,10 +684,10 @@ namespace CGA
     {
         private float _computedAbsoluteSize;
         public SizePrefix? Prefix { get; }
-        public float Value { get; }
+        public IMathExp Value { get; }
         public ISymbol Successor { get; }
 
-        public SplitStep(SizePrefix? prefix, float value, ISymbol successor)
+        public SplitStep(SizePrefix? prefix, IMathExp value, ISymbol successor)
         {
             Prefix = prefix;
             Value = value;
@@ -605,22 +697,22 @@ namespace CGA
 
         public Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset)
         {
-            var absoluteSize = GetAbsoluteSize();
+            var absoluteSize = GetAbsoluteSize(parentShape);
             var strategy = SplitStrategyFactory.Create(parentShape.GetType());
             context.PushShape(strategy.Split(parentShape, axis, offset, absoluteSize));
             return new Stack<ISymbol>(new[] { Successor });
         }
 
-        public float GetRelativeStep()
+        public float GetRelativeStep(Shape parentShape)
         {
-            return Prefix.HasValue && Prefix.Value == SizePrefix.RELATIVE ? Value : 0;
+            return Prefix.HasValue && Prefix.Value == SizePrefix.RELATIVE ? Value.Evaluate(parentShape) : 0;
         }
 
-        public float GetAbsoluteSize()
+        public float GetAbsoluteSize(Shape parentShape)
         {
             if (!Prefix.HasValue)
             {
-                return Value;
+                return Value.Evaluate(parentShape);
             }
             if (Prefix.Value == SizePrefix.RELATIVE)
             {
@@ -628,13 +720,14 @@ namespace CGA
             }
             else
             {
+                // TODO:
                 throw new NotImplementedException();
             }
         }
 
-        public void ComputeAbsoluteSize(float absoluteSizeLeft, float relativeStepsSum)
+        public void ComputeAbsoluteSize(Shape parentShape, float absoluteSizeLeft, float relativeStepsSum)
         {
-            _computedAbsoluteSize = absoluteSizeLeft / relativeStepsSum * Value;
+            _computedAbsoluteSize = absoluteSizeLeft / relativeStepsSum * Value.Evaluate(parentShape);
         }
 
         public override string ToString()
@@ -658,13 +751,13 @@ namespace CGA
 
         public Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset = 0)
         {
-            var totalAbsoluteSize = GetAbsoluteSize();
-            var absoluteSizesSum = Steps.Sum(x => x.GetAbsoluteSize());
+            var totalAbsoluteSize = GetAbsoluteSize(parentShape);
+            var absoluteSizesSum = Steps.Sum(x => x.GetAbsoluteSize(parentShape));
             var absoluteSizeLeft = totalAbsoluteSize - absoluteSizesSum;
-            var relativeStepsSum = Steps.Sum(x => x.GetRelativeStep());
+            var relativeStepsSum = Steps.Sum(x => x.GetRelativeStep(parentShape));
             foreach (var step in Steps)
             {
-                step.ComputeAbsoluteSize(absoluteSizeLeft, relativeStepsSum);
+                step.ComputeAbsoluteSize(parentShape, absoluteSizeLeft, relativeStepsSum);
             }
             var splitStrategy = SplitStrategyFactory.Create(parentShape.GetType());
             var localShape = splitStrategy.Split(parentShape, axis, offset, totalAbsoluteSize);
@@ -673,22 +766,22 @@ namespace CGA
             foreach (var step in Steps)
             {
                 newSymbols.SafePushAll(step.Split(context, axis, localShape, localOffset));
-                localOffset += step.GetAbsoluteSize();
+                localOffset += step.GetAbsoluteSize(parentShape);
             }
             return newSymbols;
         }
 
-        public float GetRelativeStep()
+        public float GetRelativeStep(Shape parentShape)
         {
             return 1;
         }
 
-        public float GetAbsoluteSize()
+        public float GetAbsoluteSize(Shape parentShape)
         {
             return _computedAbsoluteSize;
         }
 
-        public void ComputeAbsoluteSize(float absoluteSizeLeft, float relativeStepsSum)
+        public void ComputeAbsoluteSize(Shape parentShape, float absoluteSizeLeft, float relativeStepsSum)
         {
             _computedAbsoluteSize = absoluteSizeLeft / relativeStepsSum;
         }
@@ -696,7 +789,7 @@ namespace CGA
         public override string ToString() => $"{{ {string.Join(" | ", Steps.Select(x => x.ToString()))} }}{(HasSwitch ? "*" : "")}";
     }
 
-    public class Split : Operation
+    public class SplitOperation : ShapeOperation
     {
         public Axis Axis => GetParam<Axis>(0);
         public AdjustSelector Adjust => GetParam<AdjustSelector>(1);
@@ -704,14 +797,14 @@ namespace CGA
         public SplitPattern Pattern => GetParam<SplitPattern>(HasAdjust ? 2 : 1);
         public bool HasSwitch => GetParam<bool>(Params.Count - 1);
 
-        public Split(string operand, IList<object> @params) : base(operand, @params)
+        public SplitOperation(string operand, IList<object> @params) : base(operand, @params)
         {
         }
 
         public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
             var shape = context.PopShape();
-            Pattern.ComputeAbsoluteSize(shape.Size.GetElement((int)Axis), 1);
+            Pattern.ComputeAbsoluteSize(shape, shape.Size.GetElement((int)Axis), 1);
             return Pattern.Split(context, Axis, shape);
         }
 
