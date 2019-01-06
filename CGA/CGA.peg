@@ -2,7 +2,7 @@
 @using System.Reflection
 @namespace CGA
 @accessibility public
-@classname Parser
+@classname PegasusParser
 @members {
 	private static T ParseEnum<T>(string value) where T : struct, IConvertible
 	{
@@ -14,39 +14,43 @@
 	}
 }
 
-R_ParseTree <ParseTree> = productions:R_ProductionRule<0,,_> { new ParseTree(productions) }
+R_ParseTree <ParseTree> = _ statements:R_IStatement<0,,> _ EOF { new ParseTree(statements) }
+
+R_IStatement <IStatement> = R_Attribute / R_ProductionRule
+
+R_Attribute <Attribute> = "attr" _ name:R_Identifier _ ("=" / #ERROR{ "Expected '='" }) _ value:R_Float _ ";" { new Attribute(name, value) }
 
 R_ProductionRule <ProductionRule> = _ predecessor:R_Symbol _ "-->" _ successors:R_ISymbol<1,,_> _ ";" { new ProductionRule(predecessor, successors) }
 
-R_TOperation <TOperation> = "t" _ "(" _ params:R_IMathExp<3, 3, _ "," _> _ ")" { new TOperation("t", @params.Cast<object>().ToList()) }
+R_TOperation <TOperation> = "t" _ "(" _ params:(R_IRuntimeValue<3, 3, _ "," _> / #ERROR{ "Missing parameters" }) _ (")" / #ERROR{ "Expected ')'" }) { new TOperation("t", @params.Cast<object>().ToList()) }
 
-R_ROperation <ROperation> = "r" _ "(" _ params:R_IMathExp<3, 3, _ "," _> _ ")" _ { new ROperation("r", @params.Cast<object>().ToList()) }
+R_ROperation <ROperation> = "r" _ "(" _ params:(R_IRuntimeValue<3, 3, _ "," _> / #ERROR{ "Missing parameters" }) _ (")" / #ERROR{ "Expected ')'" }) { new ROperation("r", @params.Cast<object>().ToList()) }
 
-R_SOperation <SOperation> = "s" _ "(" _ params:R_IMathExp<3, 3, _ "," _> _ ")" _ { new SOperation("s", @params.Cast<object>().ToList()) }
+R_SOperation <SOperation> = "s" _ "(" _ params:(R_IRuntimeValue<3, 3, _ "," _> / #ERROR{ "Missing parameters" }) _ (")" / #ERROR{ "Expected ')'" }) { new SOperation("s", @params.Cast<object>().ToList()) }
 
-R_ExtrudeOperation <ShapeOperation> = "extrude" _ "(" _ params:R_IMathExp<1, 2, _ "," _> _ ")" _ { new ExtrudeOperation("extrude", @params.Cast<object>().ToList()) }
+R_ExtrudeOperation <ShapeOperation> = "extrude" _ "(" _ params:(R_IRuntimeValue<1, 2, _ "," _> / #ERROR{ "Missing parameters" }) _ (")" / #ERROR{ "Expected ')'" }) { new ExtrudeOperation("extrude", @params.Cast<object>().ToList()) }
 
-R_ComponentSplitOperation <ComponentSplitOperation> = "comp" _ "(" _ selector:R_ComponentSelector _ ")" _ "{" _ args:R_ComponentSplitArg<0,, _ "|" _> _ "}" { new ComponentSplitOperation("comp", new List<object>() { selector }.Union(args.Cast<object>()).ToList()) }
+R_ComponentSplitOperation <ComponentSplitOperation> = "comp" _ "(" _ selector:(R_ComponentSelector / #ERROR{ "Missing component selector" }) _ (")" / #ERROR{ "Expected ')'" }) _ "{" _ args:R_ComponentSplitArg<0,, _ "|" _> _ "}" { new ComponentSplitOperation("comp", new List<object>() { selector }.Union(args.Cast<object>()).ToList()) }
 
 R_ComponentSplitArg <ComponentSplitArg> = selector:R_SemanticSelector _ (":" / "=") _ successor:R_ISymbol { new ComponentSplitArg(selector, successor) }
 
-R_ComponentSelector <ComponentSelector> -memoize = value:("f"i / "e"i / "v"i) { (ComponentSelector)value.ToUpper()[0] }
+R_ComponentSelector <ComponentSelector> -memoize = value:("f"i / "e"i / "v"i / #ERROR{ "Invalid component selector" }) { (ComponentSelector)value.ToUpper()[0] }
 
-R_SemanticSelector <SemanticSelector> -memoize = value:("front"i / "back"i / "left"i / "right"i / "top"i / "bottom"i / "vertical"i / "horizontal"i / "side"i / "all"i) { ParseEnum<SemanticSelector>(value) }
+R_SemanticSelector <SemanticSelector> -memoize = value:("front"i / "back"i / "left"i / "right"i / "top"i / "bottom"i / "vertical"i / "horizontal"i / "side"i / "all"i / #ERROR{ "Invalid semantic selector" }) { ParseEnum<SemanticSelector>(value) }
 
-R_SplitOperation <SplitOperation> = "split" _ "(" _ params:R_SplitOperationParams _ ")" _ pattern:R_SplitPattern { new SplitOperation("split", @params.Union(new object[] { pattern }).ToList()) }
+R_SplitOperation <SplitOperation> = "split" _ "(" _ params:R_SplitOperationParams _ (")" / #ERROR{ "Expected ')'" }) _ pattern:R_SplitPattern { new SplitOperation("split", @params.Union(new object[] { pattern }).ToList()) }
 
-R_SplitOperationParams <IEnumerable<object>> = axis:R_Axis { new object[] { axis } } / axis:R_Axis _ "," _ adjust:R_AdjustSelector { new object[] { axis, adjust } }
+R_SplitOperationParams <IEnumerable<object>> = axis:R_Axis { new object[] { axis } } / axis:R_Axis _ "," _ adjust:R_AdjustSelector { new object[] { axis, adjust } } / #ERROR{ "Missing or invalid split param" }
 
 R_AdjustSelector <AdjustSelector> -memoize = value:("adjust"i / "noadjust"i) { ParseEnum<AdjustSelector>(value) }
 
-R_ISplitter <ISplitter> = R_SplitStep / R_SplitPattern
+R_ISplitter <ISplitter> = R_SplitPattern / R_SplitStep
 
-R_SplitPattern <SplitPattern> = "{" _ steps:R_ISplitter<0,, _ "|" _> _ "}" _ switch:"*"? { new SplitPattern(steps, @switch.Count > 0) }
+R_SplitPattern <SplitPattern> = "{" _ steps:R_ISplitter<0,, _ "|" _> _ ("}" / #ERROR{ "Expected '}'" }) _ switch:"*"? { new SplitPattern(steps, @switch.Count > 0) }
 
-R_SplitStep <SplitStep> = prefix:R_SizePrefix? _ value:R_IMathExp _ ":" _ successor:R_ISymbol { new SplitStep(prefix.Count == 0 ? (SizePrefix?)null : prefix[0], value, successor) }
+R_SplitStep <SplitStep> = prefix:R_SizePrefix? _ value:R_IRuntimeValue _ ":" _ successor:R_ISymbol { new SplitStep(prefix.Count == 0 ? (SizePrefix?)null : prefix[0], value, successor) }
 
-R_SizePrefix <SizePrefix> -memoize = value:("~" / "'") { (SizePrefix)value.ToUpper()[0] }
+R_SizePrefix <SizePrefix> -memoize = value:("~" / "'" / #ERROR{ "Invalid size prefix" }) { (SizePrefix)value.ToUpper()[0] }
 
 R_ShapeOperation <ShapeOperation> = R_TOperation / R_ROperation / R_SOperation / R_ExtrudeOperation / R_ComponentSplitOperation / R_SplitOperation
 
@@ -56,9 +60,23 @@ R_ISymbol <ISymbol> = R_ShapeOperation / R_Symbol
 
 R_AlgebraicOperationType <AlgebraicOperationType> -memoize = value:("+" / "-" / "*" / "/" / "^" / "%") { (AlgebraicOperationType)value[0] }
 
-R_ConstMathExpValue <float> -memoize = value:R_Float / R_NIL { 0 } / value:R_Axis { (float)value }
+R_RuntimeConstantValue <float> -memoize = value:R_Float / R_NIL { 0 } / value:R_Axis { (float)value }
 
-R_IMathExp <IMathExp> -memoize = leftOperand:R_IMathExp _ type:R_AlgebraicOperationType _ rightOperand:R_IMathExp { new AlgebraicOperation(type, leftOperand, rightOperand) } / value:R_ConstMathExpValue { new ConstMathExp(value) } / "(" _ value:R_IMathExp _ ")" {{ value.Parenthesized = true; return value; }} / "-" _ value:R_IMathExp {{ value.Negated = true; return value; }}
+R_RuntimeConstant <RuntimeConstant> = value:R_RuntimeConstantValue { new RuntimeConstant(value) } 
+
+R_AttributeValueLookup <AttributeValueLookup> = attributeName:R_Identifier { new AttributeValueLookup(attributeName) }
+
+R_ShapeAttribute <ShapeAttribute> = value:("scope.tx"i / "scope.ty"i / "scope.tz"i / "scope.rx"i / "scope.ry"i / "scope.rz"i / "scope.sx"i / "scope.sy"i / "scope.sz"i / "scope.elevation"i) { ParseEnum<ShapeAttribute>(string.Join("_", value.Split('.'))) }
+
+R_ShapeAttributeValueLookup <ShapeAttributeValueLookup> = shapeAttribute:R_ShapeAttribute { new ShapeAttributeValueLookup(shapeAttribute) }
+
+R_IRuntimeValue <IRuntimeValue> -memoize = 
+	"(" _ value:R_IRuntimeValue _ ")" {{ value.Parenthesized = true; return value; }} /
+	"-" _ value:R_IRuntimeValue {{ value.Negated = true; return value; }} /
+	leftOperand:R_IRuntimeValue _ type:R_AlgebraicOperationType _ rightOperand:R_IRuntimeValue { new AlgebraicOperation(type, leftOperand, rightOperand) } /
+	R_RuntimeConstant /
+	R_AttributeValueLookup /
+	R_ShapeAttributeValueLookup
 
 R_Axis <Axis> = value:("x"i / "y"i / "z"i) { ParseEnum<Axis>(value) }
 
@@ -69,3 +87,5 @@ R_NIL <object> -memoize = "nil"i { null }
 R_Float <float> -memoize = value:([-]?[0-9]+("."[0-9]*)?) { float.Parse(value) }
 
 _ -memoize = [ \t\r\n]*
+
+EOF = !. / c:. #ERROR{ $"Unexpected '{c}'" }

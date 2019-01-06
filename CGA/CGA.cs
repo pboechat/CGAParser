@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Pegasus.Common;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
@@ -7,6 +8,8 @@ namespace CGA
 {
     public static class NumericsExtensions
     {
+        private const float _Epsilon = 1e-6f;
+
         public static float GetElement(this Vector3 vector, int i)
         {
             if (i == 0) return vector.X;
@@ -27,6 +30,28 @@ namespace CGA
         public static Vector3 GetPosition(this Matrix4x4 matrix)
         {
             return new Vector3(matrix.M41, matrix.M42, matrix.M43);
+        }
+
+
+        // Adapted from: https://www.learnopencv.com/rotation-matrix-to-euler-angles/
+        public static Vector3 GetEulerAngles(this Matrix4x4 matrix)
+        {
+            var sy = Math.Sqrt(matrix.M11 * matrix.M11 + matrix.M21 * matrix.M21);
+            bool singular = sy < _Epsilon;
+            float x, y, z;
+            if (!singular)
+            {
+                x = (float)Math.Atan2(matrix.M32, matrix.M33);
+                y = (float)Math.Atan2(-matrix.M31, sy);
+                z = (float)Math.Atan2(matrix.M21, matrix.M11);
+            }
+            else
+            {
+                x = (float)Math.Atan2(-matrix.M23, matrix.M22);
+                y = (float)Math.Atan2(-matrix.M31, sy);
+                z = 0;
+            }
+            return new Vector3(x, y, z);
         }
 
         public static Matrix4x4 SetPosition(this Matrix4x4 matrix, Vector3 value)
@@ -89,6 +114,14 @@ namespace CGA
         }
     }
 
+    public static class EnumExtensions
+    {
+        public static string ToParseString(this ShapeAttribute shapeAttribute)
+        {
+            return string.Join(".", shapeAttribute.ToString().Split('_'));
+        }
+    }
+
     public enum Axis
     {
         X = 0,
@@ -135,28 +168,54 @@ namespace CGA
         public Vector3 Size { get; set; } = Vector3.One;
 
         public abstract Shape Copy();
+
+        public virtual float GetAttribute(ShapeAttribute shapeAttribute)
+        {
+            switch (shapeAttribute)
+            {
+                case ShapeAttribute.SCOPE_TX:
+                    return Transform.GetPosition().X;
+                case ShapeAttribute.SCOPE_TY:
+                    return Transform.GetPosition().Y;
+                case ShapeAttribute.SCOPE_TZ:
+                    return Transform.GetPosition().Z;
+                case ShapeAttribute.SCOPE_RX:
+                    return Transform.GetEulerAngles().X;
+                case ShapeAttribute.SCOPE_RY:
+                    return Transform.GetEulerAngles().Y;
+                case ShapeAttribute.SCOPE_RZ:
+                    return Transform.GetEulerAngles().Z;
+                case ShapeAttribute.SCOPE_SX:
+                    return Size.X;
+                case ShapeAttribute.SCOPE_SY:
+                    return Size.Y;
+                case ShapeAttribute.SCOPE_SZ:
+                    return Size.Z;
+                default:
+                    throw new Exception($"Unknown {nameof(ShapeAttribute)}: {shapeAttribute}");
+            }
+        }
     }
 
-    public interface IMathExp
+    public interface IRuntimeValue
     {
         bool Negated { get; set; }
         bool Parenthesized { get; set; }
-        float Evaluate(Shape shape);
+        float Evaluate(ExecutionContext context);
     }
 
-    public class ConstMathExp : IMathExp
+    public class RuntimeConstant : IRuntimeValue
     {
         private readonly float _value;
         public bool Negated { get; set; }
         public bool Parenthesized { get; set; }
 
-        public ConstMathExp(float value)
+        public RuntimeConstant(float value)
         {
             _value = value;
         }
 
-
-        public float Evaluate(Shape shape)
+        public float Evaluate(ExecutionContext context)
         {
             return Negated ? -_value : _value;
         }
@@ -164,15 +223,55 @@ namespace CGA
         public override string ToString() => (Negated ? "-" : "") + (Parenthesized ? "(" + _value.ToString() + ")" : _value.ToString());
     }
 
-    public class VarMathExp : IMathExp
+    public class AttributeValueLookup : IRuntimeValue
     {
+        private readonly string _attributeName;
         public bool Negated { get; set; }
         public bool Parenthesized { get; set; }
 
-        public float Evaluate(Shape shape)
+        public AttributeValueLookup(string attributeName)
         {
-            throw new NotImplementedException();
+            _attributeName = attributeName ?? throw new ArgumentNullException(nameof(attributeName));
         }
+
+        public float Evaluate(ExecutionContext context)
+        {
+            return context.GetAttributeValue(_attributeName);
+        }
+
+        public override string ToString() => (Negated ? "-" : "") + (Parenthesized ? "(" + _attributeName + ")" : _attributeName);
+    }
+
+    public enum ShapeAttribute
+    {
+        SCOPE_TX,
+        SCOPE_TY,
+        SCOPE_TZ,
+        SCOPE_RX,
+        SCOPE_RY,
+        SCOPE_RZ,
+        SCOPE_SX,
+        SCOPE_SY,
+        SCOPE_SZ
+    }
+
+    public class ShapeAttributeValueLookup : IRuntimeValue
+    {
+        private readonly ShapeAttribute _shapeAttribute;
+        public bool Negated { get; set; }
+        public bool Parenthesized { get; set; }
+
+        public ShapeAttributeValueLookup(ShapeAttribute shapeAttribute)
+        {
+            _shapeAttribute = shapeAttribute;
+        }
+
+        public float Evaluate(ExecutionContext context)
+        {
+            return context.CurrentShape.GetAttribute(_shapeAttribute);
+        }
+
+        public override string ToString() => (Negated ? "-" : "") + (Parenthesized ? "(" + _shapeAttribute.ToParseString() + ")" : _shapeAttribute.ToParseString());
     }
 
     public enum AlgebraicOperationType
@@ -185,15 +284,15 @@ namespace CGA
         MODULO = '%'
     }
 
-    public class AlgebraicOperation : IMathExp
+    public class AlgebraicOperation : IRuntimeValue
     {
         private readonly AlgebraicOperationType _type;
-        private readonly IMathExp _leftOperand;
-        private readonly IMathExp _rightOperand;
+        private readonly IRuntimeValue _leftOperand;
+        private readonly IRuntimeValue _rightOperand;
         public bool Negated { get; set; }
         public bool Parenthesized { get; set; }
 
-        public AlgebraicOperation(AlgebraicOperationType type, IMathExp leftOperand, IMathExp rightOperand, bool negated = false, bool parenthesized = false)
+        public AlgebraicOperation(AlgebraicOperationType type, IRuntimeValue leftOperand, IRuntimeValue rightOperand, bool negated = false, bool parenthesized = false)
         {
             _type = type;
             _leftOperand = leftOperand ?? throw new ArgumentNullException(nameof(leftOperand));
@@ -201,28 +300,28 @@ namespace CGA
             Parenthesized = parenthesized;
         }
 
-        public float Evaluate(Shape shape)
+        public float Evaluate(ExecutionContext context)
         {
             float value;
             switch (_type)
             {
                 case AlgebraicOperationType.ADDITION:
-                    value = _leftOperand.Evaluate(shape) + _rightOperand.Evaluate(shape);
+                    value = _leftOperand.Evaluate(context) + _rightOperand.Evaluate(context);
                     break;
                 case AlgebraicOperationType.SUBTRACTION:
-                    value = _leftOperand.Evaluate(shape) - _rightOperand.Evaluate(shape);
+                    value = _leftOperand.Evaluate(context) - _rightOperand.Evaluate(context);
                     break;
                 case AlgebraicOperationType.MULTIPLICATION:
-                    value = _leftOperand.Evaluate(shape) * _rightOperand.Evaluate(shape);
+                    value = _leftOperand.Evaluate(context) * _rightOperand.Evaluate(context);
                     break;
                 case AlgebraicOperationType.DIVISION:
-                    value = _leftOperand.Evaluate(shape) / _rightOperand.Evaluate(shape);
+                    value = _leftOperand.Evaluate(context) / _rightOperand.Evaluate(context);
                     break;
                 case AlgebraicOperationType.EXPONENTIATION:
-                    value = (float)Math.Pow(_leftOperand.Evaluate(shape), _rightOperand.Evaluate(shape));
+                    value = (float)Math.Pow(_leftOperand.Evaluate(context), _rightOperand.Evaluate(context));
                     break;
                 case AlgebraicOperationType.MODULO:
-                    value = _leftOperand.Evaluate(shape) % _rightOperand.Evaluate(shape);
+                    value = _leftOperand.Evaluate(context) % _rightOperand.Evaluate(context);
                     break;
                 default:
                     throw new Exception($"Unknown {nameof(AlgebraicOperationType)}: {_type}");
@@ -323,9 +422,9 @@ namespace CGA
 
     public abstract class SRTOperation : ShapeOperation
     {
-        public float X(Shape shape) => GetParam<IMathExp>(0).Evaluate(shape);
-        public float Y(Shape shape) => GetParam<IMathExp>(1).Evaluate(shape);
-        public float Z(Shape shape) => GetParam<IMathExp>(2).Evaluate(shape);
+        public float X(ExecutionContext context) => GetParam<IRuntimeValue>(0).Evaluate(context);
+        public float Y(ExecutionContext context) => GetParam<IRuntimeValue>(1).Evaluate(context);
+        public float Z(ExecutionContext context) => GetParam<IRuntimeValue>(2).Evaluate(context);
 
         public SRTOperation(string operand, IList<object> @params) : base(operand, @params)
         {
@@ -341,7 +440,7 @@ namespace CGA
         public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
             var shape = context.PopShape();
-            var T = Matrix4x4.CreateTranslation(new Vector3(X(shape), Y(shape), Z(shape)));
+            var T = Matrix4x4.CreateTranslation(new Vector3(X(context), Y(context), Z(context)));
             shape.Transform = T * shape.Transform;
             context.PushShape(shape);
             return null;
@@ -357,7 +456,7 @@ namespace CGA
         public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
             var shape = context.PopShape();
-            var R = Matrix4x4.CreateFromYawPitchRoll(Y(shape).ToRadians(), X(shape).ToRadians(), Z(shape).ToRadians());
+            var R = Matrix4x4.CreateFromYawPitchRoll(Y(context).ToRadians(), X(context).ToRadians(), Z(context).ToRadians());
             shape.Transform = R * shape.Transform;
             context.PushShape(shape);
             return null;
@@ -373,7 +472,7 @@ namespace CGA
         public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
             var shape = context.PopShape();
-            shape.Size = new Vector3(X(shape), Y(shape), Z(shape));
+            shape.Size = new Vector3(X(context), Y(context), Z(context));
             context.PushShape(shape);
             return null;
         }
@@ -414,8 +513,8 @@ namespace CGA
 
     public class ExtrudeOperation : ShapeOperation
     {
-        public Axis Axis(Shape shape) => (Params.Count == 1) ? CGA.Axis.Z : (Axis)GetParam<IMathExp>(0).Evaluate(shape);
-        public float Distance(Shape shape) => (Params.Count == 1) ? GetParam<IMathExp>(0).Evaluate(shape) : GetParam<IMathExp>(1).Evaluate(shape);
+        public Axis Axis(ExecutionContext context) => (Params.Count == 1) ? CGA.Axis.Z : (Axis)GetParam<IRuntimeValue>(0).Evaluate(context);
+        public float Distance(ExecutionContext context) => (Params.Count == 1) ? GetParam<IRuntimeValue>(0).Evaluate(context) : GetParam<IRuntimeValue>(1).Evaluate(context);
 
         public ExtrudeOperation(string operand, IList<object> @params) : base(operand, @params)
         {
@@ -425,7 +524,7 @@ namespace CGA
         {
             var shape = context.PopShape();
             var extrusionStrategy = ExtrusionStrategyFactory.Create(shape.GetType());
-            context.PushShape(extrusionStrategy.Extrude(shape, Axis(shape), Distance(shape)));
+            context.PushShape(extrusionStrategy.Extrude(shape, Axis(context), Distance(context)));
             return null;
         }
     }
@@ -643,9 +742,9 @@ namespace CGA
     public interface ISplitter
     {
         Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset);
-        float GetRelativeStep(Shape parentShape);
-        float GetAbsoluteSize(Shape parentShape);
-        void ComputeAbsoluteSize(Shape parentShape, float absoluteSizeLeft, float relativeStepsSum);
+        float GetRelativeStep(ExecutionContext context);
+        float GetAbsoluteSize(ExecutionContext context);
+        void ComputeAbsoluteSize(ExecutionContext context, float absoluteSizeLeft, float relativeStepsSum);
     }
 
     public interface ISplitStrategy
@@ -684,10 +783,10 @@ namespace CGA
     {
         private float _computedAbsoluteSize;
         public SizePrefix? Prefix { get; }
-        public IMathExp Value { get; }
+        public IRuntimeValue Value { get; }
         public ISymbol Successor { get; }
 
-        public SplitStep(SizePrefix? prefix, IMathExp value, ISymbol successor)
+        public SplitStep(SizePrefix? prefix, IRuntimeValue value, ISymbol successor)
         {
             Prefix = prefix;
             Value = value;
@@ -697,22 +796,22 @@ namespace CGA
 
         public Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset)
         {
-            var absoluteSize = GetAbsoluteSize(parentShape);
+            var absoluteSize = GetAbsoluteSize(context);
             var strategy = SplitStrategyFactory.Create(parentShape.GetType());
             context.PushShape(strategy.Split(parentShape, axis, offset, absoluteSize));
             return new Stack<ISymbol>(new[] { Successor });
         }
 
-        public float GetRelativeStep(Shape parentShape)
+        public float GetRelativeStep(ExecutionContext context)
         {
-            return Prefix.HasValue && Prefix.Value == SizePrefix.RELATIVE ? Value.Evaluate(parentShape) : 0;
+            return Prefix.HasValue && Prefix.Value == SizePrefix.RELATIVE ? Value.Evaluate(context) : 0;
         }
 
-        public float GetAbsoluteSize(Shape parentShape)
+        public float GetAbsoluteSize(ExecutionContext context)
         {
             if (!Prefix.HasValue)
             {
-                return Value.Evaluate(parentShape);
+                return Value.Evaluate(context);
             }
             if (Prefix.Value == SizePrefix.RELATIVE)
             {
@@ -725,9 +824,9 @@ namespace CGA
             }
         }
 
-        public void ComputeAbsoluteSize(Shape parentShape, float absoluteSizeLeft, float relativeStepsSum)
+        public void ComputeAbsoluteSize(ExecutionContext context, float absoluteSizeLeft, float relativeStepsSum)
         {
-            _computedAbsoluteSize = absoluteSizeLeft / relativeStepsSum * Value.Evaluate(parentShape);
+            _computedAbsoluteSize = absoluteSizeLeft / relativeStepsSum * Value.Evaluate(context);
         }
 
         public override string ToString()
@@ -751,13 +850,13 @@ namespace CGA
 
         public Stack<ISymbol> Split(ExecutionContext context, Axis axis, Shape parentShape, float offset = 0)
         {
-            var totalAbsoluteSize = GetAbsoluteSize(parentShape);
-            var absoluteSizesSum = Steps.Sum(x => x.GetAbsoluteSize(parentShape));
+            var totalAbsoluteSize = GetAbsoluteSize(context);
+            var absoluteSizesSum = Steps.Sum(x => x.GetAbsoluteSize(context));
             var absoluteSizeLeft = totalAbsoluteSize - absoluteSizesSum;
-            var relativeStepsSum = Steps.Sum(x => x.GetRelativeStep(parentShape));
+            var relativeStepsSum = Steps.Sum(x => x.GetRelativeStep(context));
             foreach (var step in Steps)
             {
-                step.ComputeAbsoluteSize(parentShape, absoluteSizeLeft, relativeStepsSum);
+                step.ComputeAbsoluteSize(context, absoluteSizeLeft, relativeStepsSum);
             }
             var splitStrategy = SplitStrategyFactory.Create(parentShape.GetType());
             var localShape = splitStrategy.Split(parentShape, axis, offset, totalAbsoluteSize);
@@ -766,22 +865,22 @@ namespace CGA
             foreach (var step in Steps)
             {
                 newSymbols.SafePushAll(step.Split(context, axis, localShape, localOffset));
-                localOffset += step.GetAbsoluteSize(parentShape);
+                localOffset += step.GetAbsoluteSize(context);
             }
             return newSymbols;
         }
 
-        public float GetRelativeStep(Shape parentShape)
+        public float GetRelativeStep(ExecutionContext context)
         {
             return 1;
         }
 
-        public float GetAbsoluteSize(Shape parentShape)
+        public float GetAbsoluteSize(ExecutionContext context)
         {
             return _computedAbsoluteSize;
         }
 
-        public void ComputeAbsoluteSize(Shape parentShape, float absoluteSizeLeft, float relativeStepsSum)
+        public void ComputeAbsoluteSize(ExecutionContext context, float absoluteSizeLeft, float relativeStepsSum)
         {
             _computedAbsoluteSize = absoluteSizeLeft / relativeStepsSum;
         }
@@ -804,14 +903,19 @@ namespace CGA
         public override Stack<ISymbol> Rewrite(ExecutionContext context)
         {
             var shape = context.PopShape();
-            Pattern.ComputeAbsoluteSize(shape, shape.Size.GetElement((int)Axis), 1);
+            Pattern.ComputeAbsoluteSize(context, shape.Size.GetElement((int)Axis), 1);
             return Pattern.Split(context, Axis, shape);
         }
 
         public override string ToString() => $"split({Axis.ToString().ToLower()}) {Pattern.ToString()}";
     }
 
-    public class ProductionRule
+    // FIXME: Marker interface is a bad design!
+    public interface IStatement
+    {
+    }
+
+    public class ProductionRule : IStatement
     {
         public Symbol Predecessor { get; }
         public IEnumerable<ISymbol> Successors { get; }
@@ -835,16 +939,37 @@ namespace CGA
         public override string ToString() => $"{Predecessor} --> {string.Join(" ", Successors.Select(x => x.ToString()))}";
     }
 
-    public class ParseTree
+    public class Attribute : IStatement
     {
-        public IEnumerable<ProductionRule> ProductionRules { get; }
+        public string Name { get; }
+        public float Value { get; }
 
-        public ParseTree(IEnumerable<ProductionRule> productionRules)
+        public Attribute(string name, float value)
         {
-            ProductionRules = productionRules ?? throw new ArgumentNullException(nameof(productionRules));
+            Name = name ?? throw new ArgumentNullException(nameof(name));
+            Value = value;
         }
 
-        public override string ToString() => $"{{\n{string.Join(",\n", ProductionRules.Select(x => '\t' + x.ToString()))}\n}}";
+        public override string ToString() => $"attr {Name} = {Value.ToString()}";
+    }
+
+    public class ParseTree
+    {
+        private readonly IEnumerable<IStatement> _statements;
+        public IEnumerable<Attribute> Attributes => GetStatements<Attribute>();
+        public IEnumerable<ProductionRule> ProductionRules => GetStatements<ProductionRule>();
+
+        public ParseTree(IEnumerable<IStatement> statements)
+        {
+            _statements = statements ?? throw new ArgumentNullException(nameof(statements));
+        }
+
+        private IEnumerable<T> GetStatements<T>() where T: IStatement
+        {
+            return _statements.Where(x => x.GetType() == typeof(T)).Cast<T>();
+        }
+
+        public override string ToString() => $"{{\n{string.Join(",\n", _statements.Select(x => '\t' + x.ToString()))}\n}}";
     }
 
     public class Axiom
@@ -861,25 +986,29 @@ namespace CGA
 
     public class ExecutionContext
     {
-        private IDictionary<Symbol, ProductionRule> ProductionRules { get; }
+        private IDictionary<Symbol, ProductionRule> _productionRules;
+        private IDictionary<string, Attribute> _attributes;
         private IList<Shape> IntermediaryShapes { get; } = new List<Shape>();
         private Stack<Shape> ShapesStack { get; } = new Stack<Shape>();
         public Axiom Axiom { get; }
+        public Shape CurrentShape { get; private set; }
         public List<Shape> TerminalShapes { get; } = new List<Shape>();
 
-        public ExecutionContext(IEnumerable<ProductionRule> productionRules, Axiom axiom)
+        public ExecutionContext(ParseTree parseTree, Axiom axiom)
         {
-            if (productionRules == null)
+            if (parseTree == null)
             {
-                throw new ArgumentNullException(nameof(productionRules));
+                throw new ArgumentNullException(nameof(parseTree));
             }
-            ProductionRules = productionRules.ToDictionary(x => x.Predecessor, y => y);
+            _productionRules = parseTree.ProductionRules.ToDictionary(x => x.Predecessor, y => y);
+            _attributes = parseTree.Attributes.ToDictionary(x => x.Name, y => y);
             Axiom = axiom ?? throw new ArgumentNullException(nameof(axiom));
         }
 
         public Shape PopShape()
         {
-            return ShapesStack.Pop();
+            CurrentShape = ShapesStack.Pop();
+            return CurrentShape;
         }
 
         public void PushShape(Shape shape)
@@ -888,19 +1017,50 @@ namespace CGA
             IntermediaryShapes.Add(shape.Copy());
         }
 
+        private Stack<ISymbol> RunTerminalRule()
+        {
+            TerminalShapes.Add(ShapesStack.Pop());
+            return null;
+        }
+
         public Stack<ISymbol> RunRule(Symbol symbol)
         {
-            if (ProductionRules.TryGetValue(symbol, out ProductionRule productionRule))
+            if (_productionRules.TryGetValue(symbol, out ProductionRule productionRule))
             {
                 return productionRule.Run(this);
             }
             return RunTerminalRule();
         }
 
-        private Stack<ISymbol> RunTerminalRule()
+        public float GetAttributeValue(string attributeName)
         {
-            TerminalShapes.Add(ShapesStack.Pop());
-            return null;
+            if (_attributes.TryGetValue(attributeName, out Attribute attribute))
+            {
+                return attribute.Value;
+            }
+            // TODO:
+            throw new Exception();
+        }
+    }
+
+    public class Parser
+    {
+        public ParseTree Parse(string content)
+        {
+            var parser = new PegasusParser();
+            try
+            {
+                return parser.Parse(content);
+            }
+            catch (FormatException e)
+            {
+                var cursor = (Cursor)e.Data["cursor"];
+                var newException = new FormatException(e.Message);
+                newException.Data["column"] = cursor.Column;
+                newException.Data["line"] = cursor.Line;
+                newException.Data["location"] = cursor.Location;
+                throw newException;
+            }
         }
     }
 
@@ -908,7 +1068,7 @@ namespace CGA
     {
         public IReadOnlyCollection<Shape> Run(ParseTree parseTree, Axiom axiom)
         {
-            var context = new ExecutionContext(parseTree.ProductionRules, axiom);
+            var context = new ExecutionContext(parseTree, axiom);
             var symbols = new Stack<ISymbol>();
             context.PushShape(axiom.Shape);
             symbols.Push(axiom.Symbol);

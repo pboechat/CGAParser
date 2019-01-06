@@ -1,7 +1,15 @@
-﻿a --> t(1 + (2 ^ 2) * -2, 0, 0) b;
+﻿
 
-y --> s(2, 1, 1) d;
+
+attr bla = 1;
+
+
+
+
+a --> t(bla + (2 ^ 2) * -2, 0, 0) b;
+
+y --> extrude(x, 0.1) d;
 
 z --> split(x) { ~1: d | { ~1: e | ~1: e }* };
 
-d --> comp(f) { side: f };
+b --> comp(f) { side: f };
