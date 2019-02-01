@@ -21,8 +21,8 @@ namespace CGARenderer
         private JoystickState _joy1StateCurrent;
         private JoystickState _joy1StateLast;
         private Controller _controller1;
-        private Gamepad _controller1StateCurrent;
-        private Gamepad _controller1StateLast;
+        private Gamepad? _controller1StateCurrent;
+        private Gamepad? _controller1StateLast;
 
         public Input()
         {
@@ -77,7 +77,7 @@ namespace CGARenderer
 
         public void Update()
         {
-            if (_keyboard.Acquire().IsFailure || _mouse.Acquire().IsFailure || _joystick1.Acquire().IsFailure)
+            if (_keyboard.Acquire().IsFailure || _mouse.Acquire().IsFailure || (_joystick1?.Acquire().IsFailure ?? false))
             {
                 return;
             }
@@ -89,10 +89,13 @@ namespace CGARenderer
             _mouseStateCurrent = _mouse.GetCurrentState();
 
             _joy1StateLast = _joy1StateCurrent;
-            _joy1StateCurrent = _joystick1.GetCurrentState();
+            _joy1StateCurrent = _joystick1?.GetCurrentState();
 
-            _controller1StateLast = _controller1StateCurrent;
-            _controller1StateCurrent = _controller1.GetState().Gamepad;
+            if (_controller1.IsConnected)
+            {
+                _controller1StateLast = _controller1StateCurrent;
+                _controller1StateCurrent = _controller1.GetState().Gamepad;
+            }
         }
 
         public bool IsKeyPressed(Key key)
@@ -179,17 +182,17 @@ namespace CGARenderer
 
         public bool DI_IsButtonPressed(int button)
         {
-            return _joy1StateCurrent.IsPressed(button);
+            return _joy1StateCurrent?.IsPressed(button) ?? false;
         }
 
         public bool DI_WasButtonPressed(int button)
         {
-            return _joy1StateLast.IsPressed(button);
+            return _joy1StateLast?.IsPressed(button) ?? false;
         }
 
         public bool DI_IsButtonReleased(int button)
         {
-            return _joy1StateCurrent.IsReleased(button);
+            return _joy1StateCurrent?.IsReleased(button) ?? false;
         }
 
         public bool DI_WasButtonReleased(int button)
@@ -199,57 +202,57 @@ namespace CGARenderer
 
         public Point DI_LeftStickPosition()
         {
-            return new Point(_joy1StateCurrent.X, _joy1StateCurrent.Y);
+            return new Point(_joy1StateCurrent?.X ?? 0, _joy1StateCurrent?.Y ?? 0);
         }
 
         public Point DI_RightStickPosition()
         {
-            return new Point(_joy1StateCurrent.RotationX, _joy1StateCurrent.RotationY);
+            return new Point(_joy1StateCurrent?.RotationX ?? 0, _joy1StateCurrent?.RotationY ?? 0);
         }
 
         public int DI_TriggersAxis()
         {
-            return _joy1StateCurrent.Z;
+            return _joy1StateCurrent?.Z ?? 0;
         }
 
         public bool XI_IsButtonPressed(GamepadButtonFlags button)
         {
-            return _controller1StateCurrent.Buttons.HasFlag(button);
+            return _controller1StateCurrent?.Buttons.HasFlag(button) ?? false;
         }
 
         public bool XI_WasButtonPressed(GamepadButtonFlags button)
         {
-            return _controller1StateLast.Buttons.HasFlag(button);
+            return _controller1StateLast?.Buttons.HasFlag(button) ?? false;
         }
 
         public bool XI_IsButtonReleased(GamepadButtonFlags button)
         {
-            return !(_controller1StateCurrent.Buttons.HasFlag(button));
+            return !(_controller1StateCurrent?.Buttons.HasFlag(button) ?? false);
         }
 
         public bool XI_WasButtonReleased(GamepadButtonFlags button)
         {
-            return !(_controller1StateLast.Buttons.HasFlag(button));
+            return !(_controller1StateLast?.Buttons.HasFlag(button) ?? false);
         }
 
         public Point XI_LeftStickPosition()
         {
-            return new Point(_controller1StateCurrent.LeftThumbX, _controller1StateCurrent.LeftThumbY);
+            return new Point(_controller1StateCurrent?.LeftThumbX ?? 0, _controller1StateCurrent?.LeftThumbY ?? 0);
         }
 
         public Point XI_RightStickPosition()
         {
-            return new Point(_controller1StateCurrent.RightThumbX, _controller1StateCurrent.RightThumbY);
+            return new Point(_controller1StateCurrent?.RightThumbX ?? 0, _controller1StateCurrent?.RightThumbY ?? 0);
         }
 
         public int XI_LeftTrigger()
         {
-            return _controller1StateCurrent.LeftTrigger;
+            return _controller1StateCurrent?.LeftTrigger ?? 0;
         }
 
         public int XI_RightTrigger()
         {
-            return _controller1StateCurrent.RightTrigger;
+            return _controller1StateCurrent?.RightTrigger ?? 0;
         }
 
         public void Dispose()
@@ -385,7 +388,7 @@ namespace CGARenderer
             }
         }
 
-        public Gamepad XInput_Controller1State_Curr
+        public Gamepad? XInput_Controller1State_Curr
         {
             get
             {
@@ -393,7 +396,7 @@ namespace CGARenderer
             }
         }
 
-        public Gamepad XInput_Controller1State_Last
+        public Gamepad? XInput_Controller1State_Last
         {
             get
             {
